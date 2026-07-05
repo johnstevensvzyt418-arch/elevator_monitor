@@ -61,6 +61,16 @@ logs/
 Log.file
 Web.log
 
+# ====== Dev Scripts (testing/simulation) ======
+*_simulator.py
+cleanup_*.py
+generate_report.py
+test_*.ps1
+test_*.py
+MANUAL_TEST_COMMANDS.ps1
+VALIDATION_REPORT.md
+*.http
+
 # ====== OS ======
 .DS_Store
 Thumbs.db

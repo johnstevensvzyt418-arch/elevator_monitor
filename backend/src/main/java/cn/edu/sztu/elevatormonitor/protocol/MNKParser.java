@@ -40,8 +40,17 @@ public class MNKParser implements ProtocolParser<MNKFrame> {
 
     // ==================== 协议常量 ====================
 
-    /** 报文最小长度 */
-    private static final int MNK_MIN_LEN = 94;
+    /** 报文最小长度（兼容设备侧 92/94 两种格式） */
+    private static final int MNK_MIN_LEN = 92;
+
+    /** 标准报文长度 */
+    private static final int MNK_STD_LEN = 94;
+
+    /** HEX 段数 */
+    private static final int SEG_COUNT = 4;
+
+    /** 每个 HEX 段标准长度 */
+    private static final int SEG_LEN = 16;
 
     /** 日期时间格式: yyyy/MM/dd HH:mm:ss */
     private static final DateTimeFormatter DT_FORMATTER =
@@ -89,25 +98,64 @@ public class MNKParser implements ProtocolParser<MNKFrame> {
         // ---- 2. 转换为小写统一处理 ----
         String data = rawData.toLowerCase();
 
-        // ---- 3. 解析四个16字节HEX段 ----
+        // ---- 3. 标准化 HEX 数据: 设备侧存在 92 字符非标准格式(seg3 缺 2 字节) ----
+        // 通过插入缺失的零字节将报文标准化为 94 字符, 后续解析逻辑不变
         String seg1, seg2, seg3, seg4;
         try {
+            String hexData = data.substring(30);
+
+            // 若 HEX 不足 64 字符, 找到 53 信号标识符位置并补齐前方缺失的 '00'
+            if (hexData.length() < 64) {
+                int pos53 = hexData.indexOf(SIG_RUN);  // "53" 运行信号
+                if (pos53 > 0) {
+                    // 标准格式中 53 位于 HEX 偏移 46 (即 seg3 偏移 14-15)
+                    // 若实际位置偏前(如偏移 44), 在 53 前插入缺失的字节
+                    int expectedPos = 46;  // 53 在标准 94 字符报文中的 HEX 偏移
+                    if (pos53 < expectedPos) {
+                        int missing = expectedPos - pos53;
+                        StringBuilder sb = new StringBuilder(hexData);
+                        // 在 53 标记前插入缺失的 '0' 字符
+                        for (int k = 0; k < missing; k++) {
+                            sb.insert(pos53, '0');
+                        }
+                        hexData = sb.toString();
+                    }
+                }
+                // 若仍不足 64 字符, 右侧补 '0'
+                while (hexData.length() < 64) {
+                    hexData = hexData + "0";
+                }
+                // 重建完整 data 字符串
+                data = data.substring(0, 30) + hexData;
+            }
+
+            // ---- 3a. 按固定 16 字符边界分割四个段 ----
             seg1 = data.substring(30, 46);
             seg2 = data.substring(46, 62);
             seg3 = data.substring(62, 78);
             seg4 = data.substring(78, 94);
 
-            // 按标识符重新定位各段（协议允许4个段乱序）
+            // ---- 3b. 按标识符重新定位各段 (协议允许 4 个段乱序) ----
+            String[] markers = {SIG_INNER_CALL, SIG_DOOR, SIG_RUN, SIG_RESERVED};
             for (int i = 30; i < 94; i += 16) {
-                String marker = data.substring(i + 12, i + 14);
-                switch (marker) {
-                    case SIG_INNER_CALL: seg1 = data.substring(i, i + 16); break;
-                    case SIG_DOOR:       seg2 = data.substring(i, i + 16); break;
-                    case SIG_RUN:        seg3 = data.substring(i, i + 16); break;
-                    case SIG_RESERVED:   seg4 = data.substring(i, i + 16); break;
-                    default:
-                        throw new ProtocolParseException("MNK-003",
-                                "非法信号标识符: " + marker + " (offset=" + i + ")");
+                // 每个段的标识符位于偏移 14-15 (最后 2 字节)或 12-13
+                String m14 = data.substring(i + 14, i + 16);  // 偏移 14-15
+                String m12 = i + 14 <= data.length() ? data.substring(i + 12, i + 14) : "";  // 偏移 12-13 (seg4 备用)
+
+                if (SIG_INNER_CALL.equals(m14) || SIG_INNER_CALL.equals(m12)) {
+                    seg1 = data.substring(i, i + 16);
+                } else if (SIG_DOOR.equals(m14) || SIG_DOOR.equals(m12)) {
+                    seg2 = data.substring(i, i + 16);
+                } else if (SIG_RUN.equals(m14) || SIG_RUN.equals(m12)) {
+                    seg3 = data.substring(i, i + 16);
+                } else if (SIG_RESERVED.equals(m14) || SIG_RESERVED.equals(m12)) {
+                    seg4 = data.substring(i, i + 16);
+                } else if (!SIG_INNER_CALL.equals(m14) && !SIG_DOOR.equals(m14)
+                        && !SIG_RUN.equals(m14) && !SIG_RESERVED.equals(m14)
+                        && !SIG_INNER_CALL.equals(m12) && !SIG_DOOR.equals(m12)
+                        && !SIG_RUN.equals(m12) && !SIG_RESERVED.equals(m12)) {
+                    throw new ProtocolParseException("MNK-003",
+                            "非法信号标识符: m14=" + m14 + " m12=" + m12 + " (offset=" + i + ")");
                 }
             }
         } catch (IndexOutOfBoundsException e) {
@@ -298,5 +346,21 @@ public class MNKParser implements ProtocolParser<MNKFrame> {
      */
     private double parseSpeed(String seg3) {
         return 0.0;
+    }
+
+    // ==================== 工具方法 ====================
+
+    /**
+     * 右侧补齐字符串到指定长度。
+     * 用于将设备侧非标准长度段补齐到 16 字符。
+     */
+    private static String padRight(String s, int len, char pad) {
+        if (s == null) return null;
+        if (s.length() >= len) return s;
+        StringBuilder sb = new StringBuilder(s);
+        while (sb.length() < len) {
+            sb.append(pad);
+        }
+        return sb.toString();
     }
 }

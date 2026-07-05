@@ -43,8 +43,8 @@ public class MNKService implements ElevatorService {
         this.distanceTrackingService = distanceTrackingService;
     }
 
-    /** 协议格式: F + 19字节日期 + /8字节ID + 4×16字节HEX段 = 最少94字符 */
-    private static final int MNK_MIN_LEN = 94;
+    /** 协议格式: F + 19字节日期 + /8字节ID + 4×16字节HEX段 = 最少92字符(兼容设备侧非标长度) */
+    private static final int MNK_MIN_LEN = 92;
 
     @Override
     public int uploadData(String data,String time ,String elevatorID) {

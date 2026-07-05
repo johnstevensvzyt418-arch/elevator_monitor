@@ -85,8 +85,14 @@ public class MNKApplicationService {
         try {
             frame = parser.parse(rawData, reportTime);
         } catch (ProtocolParseException e) {
-            LOGGER.error("[MNK-App] 协议解析失败: code={}, msg={}, elevatorId={}",
-                    e.getErrorCode(), e.getMessage(), elevatorId, e);
+            // 打印完整原始报文（含长度），便于排查设备侧发送的异常数据
+            LOGGER.error("[MNK-App] 协议解析失败: code={}, msg={}, elevatorId={}, "
+                            + "rawLen={}, rawData={}",
+                    e.getErrorCode(), e.getMessage(), elevatorId,
+                    rawData != null ? rawData.length() : 0,
+                    rawData != null && rawData.length() <= 200 ? rawData
+                            : (rawData != null ? rawData.substring(0, 200) + "..." : "null"),
+                    e);
             return -2;
         }
 

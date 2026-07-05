@@ -65,14 +65,29 @@ public class MqttMessageReceiver {
     public void handleMqttMessage(Message<?> message) {
         try {
             String topic = (String) message.getHeaders().get("mqtt_receivedTopic");
-            byte[] payloadBytes = (byte[]) message.getPayload();
-            if (payloadBytes == null || payloadBytes.length == 0) {
+
+            // ---- 兼容 String 和 byte[] 两种 payload 类型 ----
+            // EMQX 5.x 默认以 UTF-8 文本形式投递消息, Spring Integration 可能解析为 String
+            Object rawPayload = message.getPayload();
+            String payload;
+            if (rawPayload instanceof byte[]) {
+                payload = new String((byte[]) rawPayload, StandardCharsets.UTF_8).trim();
+            } else if (rawPayload instanceof String) {
+                payload = ((String) rawPayload).trim();
+            } else {
+                LOGGER.warn("[MQTT-Receiver] 未知payload类型: {}, topic={}",
+                        rawPayload.getClass().getName(), topic);
+                return;
+            }
+
+            if (payload.isEmpty()) {
                 LOGGER.warn("[MQTT-Receiver] 收到空消息, topic={}", topic);
                 return;
             }
 
-            String payload = new String(payloadBytes, StandardCharsets.UTF_8).trim();
-            LOGGER.info("[MQTT-Receiver] 收到MQTT消息: topic={}, len={}", topic, payload.length());
+            LOGGER.info("[MQTT-Receiver] 收到MQTT消息: topic={}, len={}, payload={}",
+                    topic, payload.length(),
+                    payload.length() <= 120 ? payload : payload.substring(0, 120) + "...");
 
             // ---- 路由: 命令回执 vs 设备状态上报 ----
             if (topic != null && topic.contains("/command/up")) {
