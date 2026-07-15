@@ -70,6 +70,7 @@ services:
       # 服务端口
       SERVER_PORT: "10008"
       # MySQL 连接（使用 Docker 服务名）
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/elevator_monitor?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
       MYSQL_USER: root
