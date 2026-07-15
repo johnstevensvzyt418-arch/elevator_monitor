@@ -1,22 +1,26 @@
 # ============================================================
-# .dockerignore — 排除不需要打入镜像的文件
+# .dockerignore — 多阶段构建：源码需要打入构建上下文
 # ============================================================
 
-# Maven 构建产物 — 仅保留可执行 JAR
-target/*.original
-target/maven-archiver/
-target/maven-status/
-target/generated-sources/
-target/generated-test-sources/
-target/test-classes/
+# IDE
+.idea/
+*.iml
+.vscode/
 
-# 源代码（运行时不需要）
-src/
+# 日志
+logs/
+*.log
 
-# Maven Wrapper
-.mvn/
-mvnw
-mvnw.cmd
+# Git
+.git/
+.gitignore
+
+# 临时文件
+*.tmp
+*.bak
+
+# Maven target 目录（Docker 内会重新编译）
+target/
 
 # IDE & 临时文件
 .apt_generated
