@@ -380,9 +380,15 @@
             // 更新时间 & 刷新设备在线状态
             lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
             lastDataTime = Date.now();
-            setDeviceStatus('online');
-            if (statusText && statusText.textContent === '离线') {
-                statusText.textContent = '正常';
+            // 如果告警中已包含 DEVICE_OFFLINE，不要覆盖为在线
+            if (alarmStr.indexOf('DEVICE_OFFLINE') > -1) {
+                setDeviceStatus('offline');
+                if (statusText) statusText.textContent = '离线';
+            } else {
+                setDeviceStatus('online');
+                if (statusText && statusText.textContent === '离线') {
+                    statusText.textContent = '正常';
+                }
             }
         }
 

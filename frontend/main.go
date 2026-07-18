@@ -134,14 +134,23 @@ func redisSubscriber(redisAddr, redisPassword string) {
 			DB:       0,
 		})
 
-		// 同时订阅设备状态和 AI 连续推理结果频道。
-		pubsub := rdb.Subscribe(ctx, "elevator:status", "elevator:ai_result")
-		log.Printf("[Redis] 已连接到 %s，订阅频道 elevator:status + elevator:ai_result", redisAddr)
+		// 同时订阅设备状态、AI 推理结果和规则告警频道。
+		pubsub := rdb.Subscribe(ctx, "elevator:status", "elevator:ai_result", "elevator:alarm")
+		log.Printf("[Redis] 已连接到 %s，订阅频道 elevator:status + elevator:ai_result + elevator:alarm", redisAddr)
 
 		// 阻塞读取消息
 		ch := pubsub.Channel()
 		for msg := range ch {
 			log.Printf("[Redis] 收到 %s: %s", msg.Channel, msg.Payload)
+			if msg.Channel == "elevator:alarm" {
+				// 规则引擎告警（DEVICE_OFFLINE / LEVELING_TIMEOUT 等）
+				// 包装为 ai_result 类型以复用前端的 handleRuleAlarm 处理
+				alarmMsg := fmt.Sprintf(`{"type":"ai_result","data":%s}`, msg.Payload)
+				if cache != nil {
+					cache.SendMessage(alarmMsg)
+				}
+				continue
+			}
 			if msg.Channel == "elevator:ai_result" {
 				// 只保存已完成推理的 mnk-v2 结果，供页面刷新后恢复最近趋势。
 				var result struct {
