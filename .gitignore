@@ -106,7 +106,9 @@ Desktop.ini
 .env.local
 .env.*.local
 
-# ====== Temporary ======
+# ====== Temporary & Backup ======
 *.tmp
 *.bak
 *.swp
+*.bak-codex
+*.bak-*

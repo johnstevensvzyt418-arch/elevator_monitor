@@ -22,6 +22,7 @@ from model.CNN_AE import CNN_AE
 from model.CNN_LSTM_AE import CNN_LSTM_AE
 from model.MLP_AE import MLP_AE
 from model.Transformer import TransformerAE
+from protocol_baseline import DISPLAY_THRESHOLD, ProtocolBaselineScorer
 
 # ============================================================
 # 全局变量：启动时加载
@@ -33,6 +34,9 @@ cov_matrix_inv = None
 threshold = 90.0
 score_mode = "mean"
 model_type = "LSTM_AE"
+scoring_backend = "legacy_lstm"
+feature_schema = "legacy-v1"
+baseline_scorer = None
 
 # ============================================================
 # 请求/响应模型
@@ -42,6 +46,7 @@ class PredictRequest(BaseModel):
     """推理请求"""
     deviceId: str                          # 设备ID（用于日志追踪）
     sequence: list[list[float]]            # 二维数组 [时间长度, 5]
+    schemaVersion: str = "legacy-v1"       # 防止不同协议特征被误送给模型
 
 
 class PredictResponse(BaseModel):
@@ -51,6 +56,7 @@ class PredictResponse(BaseModel):
     threshold: float
     is_abnormal: bool
     label: str                             # "normal" 或 "abnormal"
+    schema_version: str
 
 
 class HealthResponse(BaseModel):
@@ -58,6 +64,9 @@ class HealthResponse(BaseModel):
     model_type: str
     threshold: float
     device: str
+    scoring_backend: str
+    schema_version: str
+    calibration_count: int
 
 
 # ============================================================
@@ -67,17 +76,47 @@ class HealthResponse(BaseModel):
 def load_model():
     """根据 config.toml 加载模型和评分参数。"""
     global model, device, mu, cov_matrix_inv, threshold, score_mode, model_type
+    global scoring_backend, feature_schema, baseline_scorer
 
     config_path = os.path.join(os.path.dirname(__file__), "config.toml")
     with open(config_path, "rb") as f:
         config = tomli.load(f)
 
     deploy_cfg = config.get("Deploy", {})
+    scoring_backend = deploy_cfg.get("scoring_backend", "legacy_lstm")
+    feature_schema = deploy_cfg.get("feature_schema", "legacy-v1")
     model_type = deploy_cfg.get("model_type", "LSTM_AE")
     threshold = float(deploy_cfg.get("threshold", 90.0))
     score_mode = deploy_cfg.get("score_mode", "mean")
     scoring_params_file = deploy_cfg.get("scoring_params_file", "")
     use_saved = deploy_cfg.get("use_saved_scoring_params", True)
+
+    if scoring_backend == "protocol_baseline":
+        baseline_file = deploy_cfg.get("baseline_file", "")
+        if not baseline_file:
+            raise ValueError("baseline_file is required for protocol_baseline")
+        baseline_path = os.path.join(os.path.dirname(__file__), baseline_file)
+        if not os.path.exists(baseline_path):
+            raise FileNotFoundError(f"协议基线文件不存在: {baseline_path}")
+        baseline_scorer = ProtocolBaselineScorer(baseline_path, score_mode)
+        if baseline_scorer.schema_version != feature_schema:
+            raise ValueError(
+                f"配置特征版本 {feature_schema} 与基线 {baseline_scorer.schema_version} 不一致"
+            )
+        model = None
+        device = "cpu"
+        model_type = "MNK_PROTOCOL_BASELINE"
+        threshold = DISPLAY_THRESHOLD
+        score_mode = baseline_scorer.score_mode
+        print(
+            f"[AI] MNK 协议基线加载完成: schema={feature_schema}, "
+            f"normal_rows={baseline_scorer.calibration_count}, "
+            f"raw_threshold={baseline_scorer.raw_threshold:.4f}"
+        )
+        return
+
+    if scoring_backend != "legacy_lstm":
+        raise ValueError(f"Unknown scoring_backend: {scoring_backend}")
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -165,6 +204,12 @@ def compute_anomaly_score(sequence: np.ndarray) -> float:
     Returns:
         anomaly_score: float
     """
+    if scoring_backend == "protocol_baseline":
+        if baseline_scorer is None:
+            raise RuntimeError("protocol baseline is not loaded")
+        normalized_score, _ = baseline_scorer.score(sequence)
+        return normalized_score
+
     # 转为 tensor [1, time_length, 5]
     x = torch.tensor(sequence, dtype=torch.float32).unsqueeze(0).to(device)
 
@@ -207,11 +252,15 @@ app = FastAPI(
 @app.get("/health", response_model=HealthResponse)
 async def health():
     """健康检查。"""
+    calibration_count = baseline_scorer.calibration_count if baseline_scorer else 0
     return HealthResponse(
         status="ok",
         model_type=model_type,
         threshold=threshold,
         device=device,
+        scoring_backend=scoring_backend,
+        schema_version=feature_schema,
+        calibration_count=calibration_count,
     )
 
 
@@ -233,6 +282,15 @@ async def predict(req: PredictRequest):
     ```
     """
     seq = np.array(req.sequence, dtype=np.float32)
+
+    if req.schemaVersion != feature_schema:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"特征版本不匹配: request={req.schemaVersion}, "
+                f"expected={feature_schema}"
+            ),
+        )
 
     # 校验输入形状
     if seq.ndim != 2:
@@ -264,6 +322,7 @@ async def predict(req: PredictRequest):
         threshold=threshold,
         is_abnormal=is_abnormal,
         label="abnormal" if is_abnormal else "normal",
+        schema_version=feature_schema,
     )
 
 

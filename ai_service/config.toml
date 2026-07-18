@@ -47,9 +47,12 @@ dropout = 0.1
 
 
 [Deploy]
+scoring_backend = "protocol_baseline"
+feature_schema = "mnk-v2"
+baseline_file = "trained_models/mnk/protocol-baseline-v1.npz"
 model_type = "LSTM_AE"
 weight_file = "trained_models/xinshida/LSTM_AE-128-1-2026-06-29-16-43.pth"
 threshold = 90.0
-score_mode = "mean"
+score_mode = "p95"
 scoring_params_file = "trained_models/xinshida/LSTM_AE-128-1-2026-06-29-16-43-scoring.npz"
 use_saved_scoring_params = true

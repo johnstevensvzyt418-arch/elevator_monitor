@@ -90,4 +90,24 @@ public class AsyncConfig {
                 4, 16, 500, 60);
         return executor;
     }
+
+    /**
+     * AI 时序专用单线程执行器。
+     * 同一数据流必须严格按事件发布顺序进入滑动窗口，避免多线程重排时序。
+     */
+    @Bean("aiExecutor")
+    public ThreadPoolTaskExecutor aiExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(500);
+        executor.setKeepAliveSeconds(60);
+        executor.setThreadNamePrefix("ai-worker-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        LOGGER.info("[Async] aiExecutor 初始化: single-thread ordered queue=500");
+        return executor;
+    }
 }

@@ -9,47 +9,29 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
+import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * AI 异常检测监听器 — 监听 {@link ElevatorEvent}，攒批时序数据并调用 AI 推理。
- *
- * <h3>处理流程</h3>
- * <ol>
- *   <li>从 ElevatorEvent 提取 5 维特征向量</li>
- *   <li>追加到 {@link TimeSeriesBuffer}（Redis 滑动窗口）</li>
- *   <li>当窗口攒满后，调用 {@link AiPredictClient#predict}</li>
- *   <li>若 AI 判定异常，将告警写入 Redis，前端自动联动</li>
- * </ol>
- *
- * <h3>降级策略</h3>
- * <ul>
- *   <li>AI 服务不可用时 → 静默跳过，不影响主流程</li>
- *   <li>Redis 不可用时 → 跳过攒批，记录 WARN 日志</li>
- *   <li>特征值解析异常 → 使用默认值 0</li>
- * </ul>
- *
- * <h3>与 AlarmHandler 的关系</h3>
- * <p>本 Listener 与 {@code AlarmHandler} 并行运行，互补而非替代：
- * AlarmHandler 负责规则引擎告警（平层超时等），
- * AiAlarmListener 负责 AI 模型告警（异常模式检测）。</p>
- *
- * @author ai-integration
- * @since 0.3.0
+ * 监听电梯事件，维护推理窗口，并把每一次 AI 状态持续发布给监控前端。
+ * 规则告警仍由 AlarmHandler 独立处理；本监听器只负责 AI 异常检测。
  */
 @Component
 public class AiAlarmListener {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AiAlarmListener.class);
 
-    /** Redis Hash — AI 告警存储 key */
+    /** 只保存当前处于异常状态的 AI 告警，兼容已有告警流程。 */
     private static final String HASH_AI_ALARM = "elevator:ai_alarm";
-
-    /** Redis Pub/Sub — AI 告警推送频道 */
     private static final String CHANNEL_AI_ALARM = "elevator:alarm";
 
-    /** 推理触发的最小窗口大小 */
+    /** 保存并发布所有 AI 状态，包括采集中、正常、异常和服务不可用。 */
+    private static final String HASH_AI_RESULT = "elevator:ai_result";
+    private static final String CHANNEL_AI_RESULT = "elevator:ai_result";
+
     private static final int WINDOW_MIN_SIZE = 10;
+    private static final String FEATURE_SCHEMA = AiPredictClient.FEATURE_SCHEMA;
 
     private final TimeSeriesBuffer timeSeriesBuffer;
     private final AiPredictClient aiPredictClient;
@@ -65,137 +47,132 @@ public class AiAlarmListener {
 
     @PostConstruct
     public void init() {
-        LOGGER.info("[AI-Listener] Bean 初始化完成, TimeSeriesBuffer={}, AiPredictClient={}, Redis={}",
-                timeSeriesBuffer != null ? "已注入" : "NULL",
-                aiPredictClient != null ? "已注入" : "NULL",
-                redis != null ? "已注入" : "NULL");
+        LOGGER.info("[AI-Listener] initialized: buffer={}, client={}, redis={}",
+                timeSeriesBuffer != null, aiPredictClient != null, redis != null);
     }
 
-    /**
-     * 监听电梯事件，异步执行 AI 异常检测。
-     *
-     * <p>使用 {@code @Async("alarmExecutor")} 与告警评估共享线程池，
-     * 确保 AI 推理不阻塞事件主流程。</p>
-     */
     @EventListener
-    @Async("alarmExecutor")
+    @Async("aiExecutor")
     public void onElevatorEvent(ElevatorEvent event) {
-        LOGGER.debug("[AI-Listener] 收到事件: eventId={}, deviceId={}",
-                event.getEventId(), event.getDeviceId());
-
         try {
-            // ---- 1. 提取 5 维特征 ----
+            String deviceId = event.getDeviceId();
             double[] features = extractFeatures(event);
+            timeSeriesBuffer.append(deviceId, features, WINDOW_MIN_SIZE * 2);
 
-            // ---- 2. 追加到时序缓冲区 ----
-            timeSeriesBuffer.append(event.getDeviceId(), features, WINDOW_MIN_SIZE * 2);
+            long currentSize = timeSeriesBuffer.size(deviceId);
+            LOGGER.debug("[AI-Listener] buffer deviceId={} size={}/{}",
+                    deviceId, currentSize, WINDOW_MIN_SIZE);
 
-            long currentSize = timeSeriesBuffer.size(event.getDeviceId());
-            LOGGER.debug("[AI-Listener] 缓冲区 deviceId={} size={}/{}",
-                    event.getDeviceId(), currentSize, WINDOW_MIN_SIZE);
-
-            // ---- 3. 窗口攒满后触发推理 ----
             if (currentSize >= WINDOW_MIN_SIZE) {
-                performInference(event.getDeviceId());
+                performInference(deviceId);
+            } else {
+                publishCollectingState(deviceId, currentSize);
             }
-
         } catch (Exception e) {
-            LOGGER.error("[AI-Listener] 处理异常: eventId={}, deviceId={}",
+            LOGGER.error("[AI-Listener] event processing failed: eventId={}, deviceId={}",
                     event.getEventId(), event.getDeviceId(), e);
         }
     }
 
-    // ============================================================
-    // 特征提取
-    // ============================================================
-
-    /**
-     * 从 ElevatorEvent 提取 5 维特征向量。
-     *
-     * <p>当前特征映射（与模型训练数据的 xinshida 5 列对应）：</p>
-     * <ol>
-     *   <li>feature1: 门状态 → 0=关门到位, 1=开门到位, 2=关门中, 3=开门中</li>
-     *   <li>feature2: 当前楼层 → 整数</li>
-     *   <li>feature3: 目标楼层 → 整数</li>
-     *   <li>feature4: 运行方向 → 0=平层, 1=上行, 2=下行</li>
-     *   <li>feature5: 速度 (m/s)</li>
-     * </ol>
-     */
     private double[] extractFeatures(ElevatorEvent event) {
-        double[] f = new double[5];
-        f[0] = TimeSeriesBuffer.parseDoorStatus(event.getDoorStatus());
-        f[1] = TimeSeriesBuffer.parseFloor(event.getCurrentFloor());
-        f[2] = TimeSeriesBuffer.parseFloor(event.getTargetFloor());
-        f[3] = TimeSeriesBuffer.parseDirection(event.getDirection());
-        f[4] = event.getSpeed();  // speed 已是 double
-        return f;
+        double[] features = new double[5];
+        features[0] = TimeSeriesBuffer.parseDoorStatus(event.getDoorStatus());
+        features[1] = TimeSeriesBuffer.parseFloor(event.getCurrentFloor());
+        features[2] = TimeSeriesBuffer.parseFloor(event.getTargetFloor());
+        if (features[2] <= 0) {
+            features[2] = features[1];
+        }
+        features[3] = TimeSeriesBuffer.parseDirection(event.getDirection());
+        double speed = event.getSpeed();
+        features[4] = Double.isFinite(speed) ? Math.max(0.0, speed) : 0.0;
+        return features;
     }
 
-    // ============================================================
-    // 推理与告警
-    // ============================================================
-
-    /**
-     * 执行 AI 推理，若检测异常则写告警。
-     */
     private void performInference(String deviceId) {
-        // 读取完整窗口序列
         List<List<Double>> sequence = timeSeriesBuffer.readWindow(deviceId, WINDOW_MIN_SIZE);
         if (sequence.isEmpty()) {
-            LOGGER.debug("[AI-Listener] 窗口数据不足, 跳过推理 deviceId={}", deviceId);
+            LOGGER.debug("[AI-Listener] incomplete inference window deviceId={}", deviceId);
             return;
         }
 
-        // 调用 AI 服务
         AiPredictClient.PredictResult result = aiPredictClient.predict(deviceId, sequence);
         if (result == null) {
-            LOGGER.warn("[AI-Listener] AI 推理返回 null, deviceId={} (服务可能不可用)", deviceId);
+            LOGGER.warn("[AI-Listener] inference unavailable deviceId={}", deviceId);
+            publishUnavailableState(deviceId);
             return;
         }
 
-        // 若异常，写入告警
+        publishInferenceResult(deviceId, result);
         if (result.isAbnormal()) {
             writeAiAlarm(deviceId, result);
         } else {
-            // 正常时清除之前的 AI 告警
             clearAiAlarm(deviceId);
         }
     }
 
-    /**
-     * 将 AI 告警写入 Redis，前端自动展示。
-     */
     private void writeAiAlarm(String deviceId, AiPredictClient.PredictResult result) {
         try {
-            String alarmJson = String.format(
-                    "{\"type\":\"AI\",\"deviceId\":\"%s\",\"score\":%.2f,\"threshold\":%.1f,\"label\":\"%s\"}",
-                    deviceId, result.getScore(), result.getThreshold(), result.getLabel());
-
-            // HSET: 持久化 AI 告警状态
+            String alarmJson = String.format(Locale.US,
+                    "{\"type\":\"AI\",\"deviceId\":\"%s\",\"schemaVersion\":\"%s\",\"score\":%.4f,\"threshold\":%.4f,\"isAbnormal\":true,\"label\":\"%s\",\"updatedAt\":\"%s\"}",
+                    jsonEscape(deviceId), FEATURE_SCHEMA, result.getScore(), result.getThreshold(),
+                    jsonEscape(result.getLabel()), Instant.now().toString());
             redis.opsForHash().put(HASH_AI_ALARM, deviceId, alarmJson);
-
-            // PUBLISH: 实时推送前端
             redis.convertAndSend(CHANNEL_AI_ALARM, alarmJson);
-
-            LOGGER.info("[AI-Listener] ⚠️ AI 异常告警! deviceId={} score={:.2f} threshold={:.1f}",
+            LOGGER.info("[AI-Listener] abnormal deviceId={} score={} threshold={}",
                     deviceId, result.getScore(), result.getThreshold());
         } catch (Exception e) {
-            LOGGER.error("[AI-Listener] 告警写入失败 deviceId={}: {}", deviceId, e.getMessage());
+            LOGGER.error("[AI-Listener] alarm write failed deviceId={}: {}", deviceId, e.getMessage());
         }
     }
 
-    /**
-     * 清除设备的 AI 告警（恢复正常）。
-     */
     private void clearAiAlarm(String deviceId) {
         try {
-            String existing = (String) redis.opsForHash().get(HASH_AI_ALARM, deviceId);
-            if (existing != null) {
+            if (Boolean.TRUE.equals(redis.opsForHash().hasKey(HASH_AI_ALARM, deviceId))) {
                 redis.opsForHash().delete(HASH_AI_ALARM, deviceId);
-                LOGGER.info("[AI-Listener] ✅ AI 告警已清除 deviceId={}", deviceId);
+                LOGGER.info("[AI-Listener] alarm cleared deviceId={}", deviceId);
             }
         } catch (Exception e) {
-            LOGGER.error("[AI-Listener] 清除告警失败 deviceId={}: {}", deviceId, e.getMessage());
+            LOGGER.error("[AI-Listener] alarm clear failed deviceId={}: {}", deviceId, e.getMessage());
         }
+    }
+
+    private void publishCollectingState(String deviceId, long sampleCount) {
+        String json = String.format(Locale.US,
+                "{\"type\":\"AI_RESULT\",\"deviceId\":\"%s\",\"schemaVersion\":\"%s\",\"state\":\"COLLECTING\",\"ready\":false,\"sampleCount\":%d,\"requiredSamples\":%d,\"updatedAt\":\"%s\"}",
+                jsonEscape(deviceId), FEATURE_SCHEMA, sampleCount, WINDOW_MIN_SIZE, Instant.now().toString());
+        publishAiResult(deviceId, json);
+    }
+
+    private void publishInferenceResult(String deviceId, AiPredictClient.PredictResult result) {
+        String state = result.isAbnormal() ? "ABNORMAL" : "NORMAL";
+        String json = String.format(Locale.US,
+                "{\"type\":\"AI_RESULT\",\"deviceId\":\"%s\",\"schemaVersion\":\"%s\",\"state\":\"%s\",\"ready\":true,\"score\":%.4f,\"threshold\":%.4f,\"isAbnormal\":%s,\"label\":\"%s\",\"sampleCount\":%d,\"requiredSamples\":%d,\"updatedAt\":\"%s\"}",
+                jsonEscape(deviceId), FEATURE_SCHEMA, state, result.getScore(), result.getThreshold(),
+                result.isAbnormal(), jsonEscape(result.getLabel()), WINDOW_MIN_SIZE,
+                WINDOW_MIN_SIZE, Instant.now().toString());
+        publishAiResult(deviceId, json);
+    }
+
+    private void publishUnavailableState(String deviceId) {
+        String json = String.format(Locale.US,
+                "{\"type\":\"AI_RESULT\",\"deviceId\":\"%s\",\"schemaVersion\":\"%s\",\"state\":\"UNAVAILABLE\",\"ready\":false,\"sampleCount\":%d,\"requiredSamples\":%d,\"updatedAt\":\"%s\"}",
+                jsonEscape(deviceId), FEATURE_SCHEMA, WINDOW_MIN_SIZE, WINDOW_MIN_SIZE, Instant.now().toString());
+        publishAiResult(deviceId, json);
+    }
+
+    private void publishAiResult(String deviceId, String json) {
+        try {
+            redis.opsForHash().put(HASH_AI_RESULT, deviceId, json);
+            redis.convertAndSend(CHANNEL_AI_RESULT, json);
+        } catch (Exception e) {
+            LOGGER.error("[AI-Listener] AI result publish failed deviceId={}: {}", deviceId, e.getMessage());
+        }
+    }
+
+    private String jsonEscape(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }

@@ -34,6 +34,7 @@ import java.util.Map;
 public class AiPredictClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AiPredictClient.class);
+    public static final String FEATURE_SCHEMA = "mnk-v2";
 
     private final RestTemplate restTemplate;
 
@@ -66,6 +67,7 @@ public class AiPredictClient {
             Map<String, Object> requestBody = new java.util.HashMap<>();
             requestBody.put("deviceId", deviceId);
             requestBody.put("sequence", sequence);
+            requestBody.put("schemaVersion", FEATURE_SCHEMA);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -87,7 +89,7 @@ public class AiPredictClient {
 
             PredictResult result = new PredictResult(deviceId, score, threshold, isAbnormal, label);
 
-            LOGGER.info("[AI-Client] 推理完成 deviceId={} score={:.2f} threshold={:.1f} label={}",
+            LOGGER.info("[AI-Client] 推理完成 deviceId={} score={} threshold={} label={}",
                     deviceId, score, threshold, label);
 
             return result;

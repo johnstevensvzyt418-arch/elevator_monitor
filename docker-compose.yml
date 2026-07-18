@@ -83,7 +83,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # MQTT Broker（远程）
       MQTT_BROKER_URL: ${MQTT_BROKER_URL:-tcp://tcp.sealosbja.site:35205}
-      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-elevator-monitor-prod}
+      MQTT_CLIENT_ID: elevator-monitor-server
       MQTT_USERNAME: ${MQTT_USERNAME:-admin}
       MQTT_PASSWORD: ${MQTT_PASSWORD:-SZTUbdi@1005}
       # 云平台接入
@@ -150,7 +150,7 @@ services:
       PYTORCH_NO_CUDA_MEMORY_CACHING: "1"
       OMP_NUM_THREADS: "2"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen(sys.argv[1]).read()", "http://localhost:8000/health"]
       interval: 30s
       timeout: 30s
       retries: 5

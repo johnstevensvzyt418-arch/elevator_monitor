@@ -38,7 +38,7 @@ public class TimeSeriesBuffer {
     private static final Logger LOGGER = LoggerFactory.getLogger(TimeSeriesBuffer.class);
 
     /** Redis Key 前缀 */
-    private static final String KEY_PREFIX = "ai:series:";
+    private static final String KEY_PREFIX = "ai:series:mnk-v2:";
 
     /** 滑动窗口默认大小 */
     private static final int DEFAULT_WINDOW_SIZE = 20;
