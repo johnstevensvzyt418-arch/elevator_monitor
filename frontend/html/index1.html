@@ -24,7 +24,7 @@
             </div>
             <div class="font-thin h5" style="margin-left:auto;">
                 <span class="status-dot disconnected" id="statusDot"></span>
-                连接状态：<span id="connectionStatus">未连接</span>
+                设备状态：<span id="connectionStatus">等待数据</span>
             </div>
         </div>
         <div class="card-main">
@@ -136,6 +136,12 @@
         var reconnectDelay = 1000;
         var maxReconnectDelay = 30000;
 
+        // ========== 设备数据超时检测 ==========
+        var lastDataTime = 0;           // 最后一次收到设备数据的时间戳
+        var staleCheckTimer = null;     // 超时检测定时器
+        var STALE_THRESHOLD = 30000;    // 30 秒无数据视为设备离线
+        var wsConnected = false;        // WebSocket 是否连通
+
         function connectWebSocket() {
             if (ws) {
                 try { ws.close(); } catch(e) {}
@@ -147,8 +153,11 @@
             ws.onopen = function() {
                 clearReconnectTimer();
                 reconnectDelay = 1000;
-                setConnectionStatus(true);
-                statusText.textContent = '已连接';
+                wsConnected = true;
+                // WebSocket 刚连上时设备状态仍为"等待数据"，直到收到第一条报文
+                if (lastDataTime === 0) {
+                    setDeviceStatus('waiting');
+                }
                 lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
                 showToast('已连接到监控服务器', 'success');
             };
@@ -156,12 +165,18 @@
             ws.onmessage = function(msg) {
                 try {
                     var obj = JSON.parse(msg.data);
+                    // 告警消息（AI + 规则引擎）单独处理
+                    if (obj.type === 'ai_alarm') {
+                        handleAlarm(obj.data);
+                        return;
+                    }
                     handleMessage(obj);
                 } catch(e) {}
             };
 
             ws.onclose = function() {
-                setConnectionStatus(false);
+                wsConnected = false;
+                setDeviceStatus('disconnected');
                 scheduleReconnect();
             };
 
@@ -184,13 +199,58 @@
             }
         }
 
-        function setConnectionStatus(connected) {
-            if (connected) {
-                connectionStatus.textContent = '已连接';
-                statusDot.className = 'status-dot connected';
-            } else {
-                connectionStatus.textContent = '已断开';
-                statusDot.className = 'status-dot disconnected';
+        /**
+         * 设置设备状态显示。
+         * @param {'online'|'offline'|'waiting'|'disconnected'} state
+         */
+        function setDeviceStatus(state) {
+            switch (state) {
+                case 'online':
+                    connectionStatus.textContent = '设备在线';
+                    statusDot.className = 'status-dot connected';
+                    break;
+                case 'offline':
+                    connectionStatus.textContent = '设备离线';
+                    statusDot.className = 'status-dot disconnected';
+                    break;
+                case 'waiting':
+                    connectionStatus.textContent = '等待数据';
+                    statusDot.className = 'status-dot disconnected';
+                    break;
+                case 'disconnected':
+                    connectionStatus.textContent = '服务断开';
+                    statusDot.className = 'status-dot disconnected';
+                    break;
+            }
+        }
+
+        /**
+         * 启动设备数据超时检测，每 5 秒检查一次。
+         */
+        function startStaleCheck() {
+            if (staleCheckTimer) clearInterval(staleCheckTimer);
+            staleCheckTimer = setInterval(function() {
+                var now = Date.now();
+                // 只有曾经收到过数据 + WebSocket 连通时才做超时判断
+                if (lastDataTime > 0 && wsConnected && (now - lastDataTime) > STALE_THRESHOLD) {
+                    setDeviceStatus('offline');
+                    // 将页面数据变灰提示
+                    if (statusText) statusText.textContent = '离线';
+                }
+            }, 5000);
+        }
+
+        /**
+         * 处理告警消息（AI 模型 + 规则引擎告警如 DEVICE_OFFLINE）。
+         */
+        function handleAlarm(data) {
+            // 规则引擎告警: {"DeviceId":"xxx","RuleName":"DEVICE_OFFLINE",...}
+            if (data.RuleName) {
+                if (data.RuleName === 'DEVICE_OFFLINE') {
+                    setDeviceStatus('offline');
+                    if (statusText) statusText.textContent = '离线';
+                    showToast('⚠ ' + (data.DeviceId || '设备') + ' 离线: ' + (data.Description || ''), 'warning');
+                }
             }
         }
 
@@ -270,8 +330,13 @@
                 }
             }
 
-            // 更新时间
+            // 更新时间 & 刷新设备在线状态
             lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
+            lastDataTime = Date.now();
+            setDeviceStatus('online');
+            if (statusText && statusText.textContent === '离线') {
+                statusText.textContent = '正常';
+            }
         }
 
         function resetAllAlarms() {
@@ -335,6 +400,7 @@
         // ========== 启动 ==========
         lastUpdateTime.textContent = '正在连接...';
         connectWebSocket();
+        startStaleCheck();
 
     })();
     </script>
