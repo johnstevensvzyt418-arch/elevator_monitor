@@ -137,13 +137,23 @@
         var connectionStatus = document.getElementById("connectionStatus");
         var statusDot = document.getElementById("statusDot");
         var toast = document.getElementById("toast");
-        var aiMonitor = window.AiMonitor.init({
-            rootId: 'aiPanel',
-            targetDeviceId: targetDeviceId,
-            onAbnormal: function(result) {
-                showToast('AI 检测到异常：' + result.deviceId + '，得分 ' + result.score.toFixed(2), 'warning');
+        var aiMonitor = null;
+        try {
+            if (typeof window.AiMonitor === 'undefined') {
+                console.error('[AI-Monitor] ai-monitor.js 未加载，AI 异常检测不可用');
+            } else {
+                aiMonitor = window.AiMonitor.init({
+                    rootId: 'aiPanel',
+                    targetDeviceId: targetDeviceId,
+                    onAbnormal: function(result) {
+                        showToast('AI 检测到异常：' + result.deviceId + '，得分 ' + result.score.toFixed(2), 'warning');
+                    }
+                });
+                console.log('[AI-Monitor] 初始化完成, targetDeviceId=' + (targetDeviceId || '(全局)'));
             }
-        });
+        } catch(e) {
+            console.error('[AI-Monitor] 初始化失败:', e);
+        }
 
         // ========== 报警列表项缓存 ==========
         var alarmItems = {};
@@ -169,7 +179,7 @@
         // ========== 设备数据超时检测 ==========
         var lastDataTime = 0;           // 最后一次收到设备数据的时间戳
         var staleCheckTimer = null;     // 超时检测定时器
-        var STALE_THRESHOLD = 30000;    // 30 秒无数据视为设备离线
+        var STALE_THRESHOLD = 120000;   // 120 秒无数据视为设备离线
         var wsConnected = false;        // WebSocket 是否连通
 
         function connectWebSocket() {
@@ -198,13 +208,20 @@
                     if (obj.type === 'ai_result') {
                         // 检查是否为规则告警（DEVICE_OFFLINE 等）
                         if (obj.data && obj.data.RuleName) {
+                            console.log('[AI-Monitor] 收到规则告警:', obj.data.RuleName, obj.data.DeviceId);
                             handleRuleAlarm(obj.data);
                         }
-                        aiMonitor.handle(obj.data);
+                        if (aiMonitor) {
+                            aiMonitor.handle(obj.data);
+                        } else {
+                            console.warn('[AI-Monitor] aiMonitor 未初始化，丢弃 ai_result 消息');
+                        }
                         return;
                     }
                     handleMessage(obj);
-                } catch(e) {}
+                } catch(e) {
+                    console.error('[WS] 消息处理异常:', e, msg.data);
+                }
             };
 
             ws.onclose = function() {
@@ -295,7 +312,7 @@
 
             // 设备 ID（使用 textContent 防 XSS）
             device.textContent = obj.Device || '--';
-            aiMonitor.showDevice(obj.Device);
+            if (aiMonitor) aiMonitor.showDevice(obj.Device);
 
             // 楼层
             floor.textContent = obj.Floor || '--';
