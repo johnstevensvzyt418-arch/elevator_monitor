@@ -28,9 +28,21 @@ public class DoorOpenRunningRule implements AlarmRule {
     public AlarmEvent evaluate(ElevatorMessage msg, DeviceState state) {
         String dir = msg.getDirection();
         String door = msg.getDoorStatus();
+        double speed = msg.getSpeed();
 
-        // 仅在电梯实际运动中检测（排除平层00和硬件故障03，两者均非运行状态）
-        if (dir == null || "00".equals(dir) || "03".equals(dir)) {
+        // 仅在电梯运动中检测（方向非平层00）
+        if (dir == null || "00".equals(dir)) {
+            return null;
+        }
+
+        // 排除硬件故障方向码 "03"（由 HardwareFaultRule 单独处理）
+        if ("03".equals(dir)) {
+            return null;
+        }
+
+        // 速度阈值: 电梯停止开门时不触发 (避免到站正常开门的误报)
+        // speed=-1 表示速度未计算，此时仅凭方向+门状态判断
+        if (speed >= 0 && speed < 0.1) {
             return null;
         }
 
