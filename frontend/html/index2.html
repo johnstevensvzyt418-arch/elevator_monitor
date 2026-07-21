@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
-    <title>电梯状态监控页面</title>
-    <link rel="stylesheet" type="text/css" href="/static/css/main.css">
+    <title>设备详情 — 电梯物联网</title>
+    <link rel="stylesheet" type="text/css" href="/static/css/main.css" id="mainCss">
 </head>
 
 <body>
@@ -14,7 +14,36 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
+    <!-- 顶部导航栏 -->
+    <nav class="top-nav">
+        <a id="navBack" href="/" class="top-nav-back">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15,18 9,12 15,6" />
+            </svg>
+            <span>返回搜索</span>
+        </a>
+        <span class="top-nav-title" id="navTitle">设备详情</span>
+        <a id="navMonitor" href="/monitor" class="top-nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            <span>实时监控</span>
+        </a>
+    </nav>
+
     <div class="card">
+        <!-- AI 异常告警横幅 -->
+        <div class="ai-alert-banner" id="aiAlertBanner">
+            <span class="ai-alert-banner-icon">⚠</span>
+            <span class="ai-alert-banner-text" id="aiAlertText">
+                设备 <strong id="aiAlertDevice">--</strong> 得分 <strong id="aiAlertScore">--</strong>，超过阈值，请及时核查！
+            </span>
+            <span class="ai-alert-banner-detail" id="aiAlertDetail" title="滚动到 AI 面板">查看详情</span>
+            <button class="ai-alert-banner-close" id="aiAlertClose" title="关闭">&times;</button>
+        </div>
+
         <div class="card-title b-light b-b">
             <div class="font-thin h5">
                 电梯ID：<span id="device">获取中</span>
@@ -115,373 +144,388 @@
 
     <script src="/static/js/ai-monitor.js"></script>
     <script>
-    (function() {
-        'use strict';
+        (function () {
+            'use strict';
 
-        // ========== 设备过滤 ==========
-        var targetDeviceId = getQueryString('id');
-
-        // ========== DOM 引用 ==========
-        var device = document.getElementById("device");
-        var lastUpdateTime = document.getElementById("lastUpdateTime");
-        var floor = document.getElementById("floor");
-        var toFloor = document.getElementById("toFloor");
-        var direction = document.getElementById("direction");
-        var door = document.getElementById("door");
-        var statusText = document.getElementById("status-text");
-        var passenger = document.getElementById("passenger");
-        var speed = document.getElementById("speed");
-        var distance = document.getElementById("distance");
-        var times = document.getElementById("times");
-        var runtime = document.getElementById("runtime");
-        var connectionStatus = document.getElementById("connectionStatus");
-        var statusDot = document.getElementById("statusDot");
-        var toast = document.getElementById("toast");
-        var aiMonitor = null;
-        try {
-            if (typeof window.AiMonitor === 'undefined') {
-                console.error('[AI-Monitor] ai-monitor.js 未加载，AI 异常检测不可用');
-            } else {
-                aiMonitor = window.AiMonitor.init({
-                    rootId: 'aiPanel',
-                    targetDeviceId: targetDeviceId,
-                    onAbnormal: function(result) {
-                        showToast('AI 检测到异常：' + result.deviceId + '，得分 ' + result.score.toFixed(2), 'warning');
-                    }
-                });
-                console.log('[AI-Monitor] 初始化完成, targetDeviceId=' + (targetDeviceId || '(全局)'));
-            }
-        } catch(e) {
-            console.error('[AI-Monitor] 初始化失败:', e);
-        }
-
-        // ========== 报警列表项缓存 ==========
-        var alarmItems = {};
-        var alarmTexts = {};
-        for (var i = 0; i < 8; i++) {
-            var code = (i < 10 ? '0' : '') + i;
-            alarmItems[code] = document.getElementById('alarm_' + code);
-            alarmTexts[code] = document.getElementById('alarm_' + code + '_text');
-        }
-
-        // ========== 告警码映射 ==========
-        var ALARM_MAP = {
-            "00": 0, "01": 1, "02": 2, "03": 3,
-            "04": 4, "05": 5, "06": 6, "07": 7
-        };
-
-        // ========== WebSocket 连接管理 ==========
-        var ws = null;
-        var reconnectTimer = null;
-        var reconnectDelay = 1000;
-        var maxReconnectDelay = 30000;
-
-        // ========== 设备数据超时检测 ==========
-        var lastDataTime = 0;           // 最后一次收到设备数据的时间戳
-        var staleCheckTimer = null;     // 超时检测定时器
-        var STALE_THRESHOLD = 120000;   // 120 秒无数据视为设备离线
-        var wsConnected = false;        // WebSocket 是否连通
-
-        function connectWebSocket() {
-            if (ws) {
-                try { ws.close(); } catch(e) {}
+            // ========== 适配 file:// 本地打开 ==========
+            if (window.location.protocol === 'file:') {
+                document.getElementById('mainCss').href = '../static/css/main.css';
+                document.getElementById('navBack').href = 'search.html';
+                document.getElementById('navMonitor').href = 'index1.html';
             }
 
-            var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
-            ws = new WebSocket(url);
+            // ========== 设备过滤 ==========
+            var targetDeviceId = getQueryString('id');
 
-            ws.onopen = function() {
-                clearReconnectTimer();
-                reconnectDelay = 1000;
-                wsConnected = true;
-                if (lastDataTime === 0) {
-                    setDeviceStatus('waiting');
-                }
-                lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
-                showToast('已连接到监控服务器', 'success');
-            };
+            // ========== DOM 引用 ==========
+            var device = document.getElementById("device");
+            var lastUpdateTime = document.getElementById("lastUpdateTime");
+            var floor = document.getElementById("floor");
+            var toFloor = document.getElementById("toFloor");
+            var direction = document.getElementById("direction");
+            var door = document.getElementById("door");
+            var statusText = document.getElementById("status-text");
+            var passenger = document.getElementById("passenger");
+            var speed = document.getElementById("speed");
+            var distance = document.getElementById("distance");
+            var times = document.getElementById("times");
+            var runtime = document.getElementById("runtime");
+            var connectionStatus = document.getElementById("connectionStatus");
+            var statusDot = document.getElementById("statusDot");
+            var toast = document.getElementById("toast");
+            var navTitle = document.getElementById("navTitle");
 
-            ws.onmessage = function(msg) {
-                try {
-                    var obj = JSON.parse(msg.data);
-                    // AI 结果 / 规则告警消息单独处理
-                    if (obj.type === 'ai_result') {
-                        // 检查是否为规则告警（DEVICE_OFFLINE 等）
-                        if (obj.data && obj.data.RuleName) {
-                            console.log('[AI-Monitor] 收到规则告警:', obj.data.RuleName, obj.data.DeviceId);
-                            handleRuleAlarm(obj.data);
+            // AI 告警横幅
+            var aiAlertBanner = document.getElementById('aiAlertBanner');
+            var aiAlertDevice = document.getElementById('aiAlertDevice');
+            var aiAlertScore = document.getElementById('aiAlertScore');
+            var aiAlertDetail = document.getElementById('aiAlertDetail');
+            var aiAlertClose = document.getElementById('aiAlertClose');
+            var aiPanel = document.getElementById('aiPanel');
+            var aiAlertDismissed = false;
+
+            if (targetDeviceId && navTitle) {
+                navTitle.textContent = targetDeviceId;
+            }
+
+            function showAiAlert(result) {
+                if (aiAlertDismissed) return;
+                aiAlertDevice.textContent = result.deviceId || '--';
+                aiAlertScore.textContent = (result.score != null ? result.score.toFixed(2) : '--');
+                aiAlertBanner.classList.add('active');
+            }
+
+            function hideAiAlert() {
+                aiAlertBanner.classList.remove('active');
+            }
+
+            aiAlertClose.addEventListener('click', function () {
+                aiAlertDismissed = true;
+                hideAiAlert();
+            });
+
+            aiAlertDetail.addEventListener('click', function () {
+                if (aiPanel) aiPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+
+            // ========== AI 监控初始化 ==========
+            var aiMonitor = null;
+            try {
+                if (typeof window.AiMonitor === 'undefined') {
+                    console.error('[AI-Monitor] ai-monitor.js 未加载，AI 异常检测不可用');
+                } else {
+                    aiMonitor = window.AiMonitor.init({
+                        rootId: 'aiPanel',
+                        targetDeviceId: targetDeviceId,
+                        onAbnormal: function (result) {
+                            showToast('AI 检测到异常：' + result.deviceId + '，得分 ' + result.score.toFixed(2), 'warning');
+                            showAiAlert(result);
                         }
-                        if (aiMonitor) {
-                            aiMonitor.handle(obj.data);
-                        } else {
-                            console.warn('[AI-Monitor] aiMonitor 未初始化，丢弃 ai_result 消息');
-                        }
-                        return;
-                    }
-                    handleMessage(obj);
-                } catch(e) {
-                    console.error('[WS] 消息处理异常:', e, msg.data);
+                    });
+                    console.log('[AI-Monitor] 初始化完成, targetDeviceId=' + (targetDeviceId || '(全局)'));
                 }
-            };
-
-            ws.onclose = function() {
-                wsConnected = false;
-                setDeviceStatus('disconnected');
-                scheduleReconnect();
-            };
-
-            ws.onerror = function() {};
-        }
-
-        function scheduleReconnect() {
-            clearReconnectTimer();
-            showToast('连接已断开，正在重连... (' + Math.round(reconnectDelay / 1000) + 's)', 'warning');
-            reconnectTimer = setTimeout(function() {
-                connectWebSocket();
-                reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
-            }, reconnectDelay);
-        }
-
-        function clearReconnectTimer() {
-            if (reconnectTimer) {
-                clearTimeout(reconnectTimer);
-                reconnectTimer = null;
-            }
-        }
-
-        /**
-         * 设置设备状态显示。
-         * @param {'online'|'offline'|'waiting'|'disconnected'} state
-         */
-        function setDeviceStatus(state) {
-            switch (state) {
-                case 'online':
-                    connectionStatus.textContent = '设备在线';
-                    statusDot.className = 'status-dot connected';
-                    break;
-                case 'offline':
-                    connectionStatus.textContent = '设备离线';
-                    statusDot.className = 'status-dot disconnected';
-                    break;
-                case 'waiting':
-                    connectionStatus.textContent = '等待数据';
-                    statusDot.className = 'status-dot disconnected';
-                    break;
-                case 'disconnected':
-                    connectionStatus.textContent = '服务断开';
-                    statusDot.className = 'status-dot disconnected';
-                    break;
-            }
-        }
-
-        /**
-         * 启动设备数据超时检测，每 5 秒检查一次。
-         */
-        function startStaleCheck() {
-            if (staleCheckTimer) clearInterval(staleCheckTimer);
-            staleCheckTimer = setInterval(function() {
-                var now = Date.now();
-                if (lastDataTime > 0 && wsConnected && (now - lastDataTime) > STALE_THRESHOLD) {
-                    setDeviceStatus('offline');
-                    if (statusText) statusText.textContent = '离线';
-                }
-            }, 5000);
-        }
-
-        /**
-         * 处理规则引擎告警（DEVICE_OFFLINE / DOOR_OPEN_TOO_LONG 等）。
-         */
-        function handleRuleAlarm(data) {
-            var deviceId = data.DeviceId || '';
-            var ruleName = data.RuleName || '';
-            var desc = data.Description || '';
-            if (targetDeviceId && targetDeviceId !== deviceId) return;
-            if (ruleName === 'DEVICE_OFFLINE') {
-                setDeviceStatus('offline');
-                if (statusText) statusText.textContent = '离线';
-                showToast('⚠ ' + (deviceId || '设备') + ' 离线: ' + desc, 'warning');
-            }
-        }
-
-        // ========== 消息处理 ==========
-        function handleMessage(obj) {
-            // 设备过滤
-            if (targetDeviceId && targetDeviceId !== obj.Device) {
-                return;
+            } catch (e) {
+                console.error('[AI-Monitor] 初始化失败:', e);
             }
 
-            // 设备 ID（使用 textContent 防 XSS）
-            device.textContent = obj.Device || '--';
-            if (aiMonitor) aiMonitor.showDevice(obj.Device);
-
-            // 楼层
-            floor.textContent = obj.Floor || '--';
-            toFloor.textContent = obj.ToFloor || '--';
-
-            // 速度
-            speed.textContent = obj.Speed || '--';
-
-            // 运行时间
-            runtime.textContent = obj.Runtime || '--';
-
-            // 运行里程
-            distance.textContent = obj.Distance || '--';
-
-            // 运行次数
-            times.textContent = obj.Times || '--';
-
-            // 状态
-            switch(obj.Status) {
-                case '00': statusText.textContent = '正常'; break;
-                case '01': statusText.textContent = '异常'; break;
-                case '02': statusText.textContent = '未知'; break;
-                default:   statusText.textContent = '--';   break;
-            }
-
-            // 方向
-            switch(obj.Direction) {
-                case '00': direction.textContent = ' '; break;
-                case '01': direction.textContent = '▲'; break;
-                case '02': direction.textContent = '▼'; break;
-                default:   direction.textContent = '-'; break;
-            }
-
-            // 轿厢门
-            switch(obj.Door) {
-                case '00': door.textContent = '关门到位'; break;
-                case '01': door.textContent = '开门到位'; break;
-                case '02': door.textContent = '关门中';   break;
-                case '03': door.textContent = '开门中';   break;
-                default:   door.textContent = '--';       break;
-            }
-
-            // 乘客
-            switch(obj.Passenger) {
-                case '00': passenger.textContent = '无乘客'; break;
-                case '01': passenger.textContent = '有乘客'; break;
-                default:   passenger.textContent = '--';     break;
-            }
-
-            // ========== 报警信息（数字码 + 字符串回退） ==========
-            resetAllAlarms();
-            var alarmStr = obj.Alarm || '';
-            if (alarmStr) {
-                var matched = false;
-                // 先尝试数字编码匹配
-                for (var code in ALARM_MAP) {
-                    if (alarmStr.indexOf(code) > -1) {
-                        setAlarmOn(ALARM_MAP[code]);
-                        matched = true;
-                    }
-                }
-                // 字符串回退匹配（兼容后端告警规则引擎命名的告警码）
-                if (!matched) {
-                    if (alarmStr.indexOf('LEVELING') > -1 || alarmStr.indexOf('TIMEOUT') > -1) setAlarmOn(0);
-                    if (alarmStr.indexOf('ALARM_FIELD') > -1) setAlarmOn(0);
-                    if (alarmStr.indexOf('LOW_SPEED') > -1) setAlarmOn(2);
-                    if (alarmStr.indexOf('SPEED_ABNORMAL') > -1) setAlarmOn(1);
-                    if (alarmStr.indexOf('OVER_TOP') > -1) setAlarmOn(3);
-                    if (alarmStr.indexOf('FLOOR_JUMP') > -1) setAlarmOn(4);
-                    if (alarmStr.indexOf('DOOR_OPEN_RUNNING') > -1) {
-                        setAlarmOn(5);
-                        // 开门载人运行：DOOR_OPEN_RUNNING + 有乘客
-                        if (obj.Passenger === '01') setAlarmOn(6);
-                    }
-                    if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(5);
-                    if (alarmStr.indexOf('LONG_IDLE') > -1 || alarmStr.indexOf('IDLE') > -1) setAlarmOn(7);
-                    if (alarmStr.indexOf('DEVICE_OFFLINE') > -1 || alarmStr.indexOf('OFFLINE') > -1) setAlarmOn(7);
-                    if (alarmStr.indexOf('HARDWARE_FAULT') > -1) setAlarmOn(7);
-                    if (alarmStr.indexOf('DIRECTION') > -1) setAlarmOn(7);
-                }
-            }
-
-            // 更新时间 & 刷新设备在线状态
-            lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
-            lastDataTime = Date.now();
-            // 如果告警中已包含 DEVICE_OFFLINE，不要覆盖为在线
-            if (alarmStr.indexOf('DEVICE_OFFLINE') > -1) {
-                setDeviceStatus('offline');
-                if (statusText) statusText.textContent = '离线';
-            } else {
-                setDeviceStatus('online');
-                if (statusText && statusText.textContent === '离线') {
-                    statusText.textContent = '正常';
-                }
-            }
-        }
-
-        function resetAllAlarms() {
+            // ========== 报警列表项缓存 ==========
+            var alarmItems = {};
+            var alarmTexts = {};
             for (var i = 0; i < 8; i++) {
                 var code = (i < 10 ? '0' : '') + i;
+                alarmItems[code] = document.getElementById('alarm_' + code);
+                alarmTexts[code] = document.getElementById('alarm_' + code + '_text');
+            }
+
+            // ========== 告警码映射 ==========
+            var ALARM_MAP = {
+                "00": 0, "01": 1, "02": 2, "03": 3,
+                "04": 4, "05": 5, "06": 6, "07": 7
+            };
+
+            // ========== WebSocket 连接管理 ==========
+            var ws = null;
+            var reconnectTimer = null;
+            var reconnectDelay = 1000;
+            var maxReconnectDelay = 30000;
+
+            // ========== 设备数据超时检测 ==========
+            var lastDataTime = 0;
+            var staleCheckTimer = null;
+            var STALE_THRESHOLD = 120000;
+            var wsConnected = false;
+
+            function connectWebSocket() {
+                if (ws) {
+                    try { ws.close(); } catch (e) { }
+                }
+
+                var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+                ws = new WebSocket(url);
+
+                ws.onopen = function () {
+                    clearReconnectTimer();
+                    reconnectDelay = 1000;
+                    wsConnected = true;
+                    if (lastDataTime === 0) {
+                        setDeviceStatus('waiting');
+                    }
+                    lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
+                    showToast('已连接到监控服务器', 'success');
+                };
+
+                ws.onmessage = function (msg) {
+                    try {
+                        var obj = JSON.parse(msg.data);
+                        if (obj.type === 'ai_result') {
+                            if (obj.data && obj.data.RuleName) {
+                                console.log('[AI-Monitor] 收到规则告警:', obj.data.RuleName, obj.data.DeviceId);
+                                handleRuleAlarm(obj.data);
+                            }
+                            if (aiMonitor) {
+                                aiMonitor.handle(obj.data);
+                            } else {
+                                console.warn('[AI-Monitor] aiMonitor 未初始化，丢弃 ai_result 消息');
+                            }
+                            return;
+                        }
+                        handleMessage(obj);
+                    } catch (e) {
+                        console.error('[WS] 消息处理异常:', e, msg.data);
+                    }
+                };
+
+                ws.onclose = function () {
+                    wsConnected = false;
+                    setDeviceStatus('disconnected');
+                    scheduleReconnect();
+                };
+
+                ws.onerror = function () { };
+            }
+
+            function scheduleReconnect() {
+                clearReconnectTimer();
+                showToast('连接已断开，正在重连... (' + Math.round(reconnectDelay / 1000) + 's)', 'warning');
+                reconnectTimer = setTimeout(function () {
+                    connectWebSocket();
+                    reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+                }, reconnectDelay);
+            }
+
+            function clearReconnectTimer() {
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            }
+
+            function setDeviceStatus(state) {
+                switch (state) {
+                    case 'online':
+                        connectionStatus.textContent = '设备在线';
+                        statusDot.className = 'status-dot connected';
+                        break;
+                    case 'offline':
+                        connectionStatus.textContent = '设备离线';
+                        statusDot.className = 'status-dot disconnected';
+                        break;
+                    case 'waiting':
+                        connectionStatus.textContent = '等待数据';
+                        statusDot.className = 'status-dot disconnected';
+                        break;
+                    case 'disconnected':
+                        connectionStatus.textContent = '服务断开';
+                        statusDot.className = 'status-dot disconnected';
+                        break;
+                }
+            }
+
+            function startStaleCheck() {
+                if (staleCheckTimer) clearInterval(staleCheckTimer);
+                staleCheckTimer = setInterval(function () {
+                    var now = Date.now();
+                    if (lastDataTime > 0 && wsConnected && (now - lastDataTime) > STALE_THRESHOLD) {
+                        setDeviceStatus('offline');
+                        if (statusText) statusText.textContent = '离线';
+                    }
+                }, 5000);
+            }
+
+            function handleRuleAlarm(data) {
+                var deviceId = data.DeviceId || '';
+                var ruleName = data.RuleName || '';
+                var desc = data.Description || '';
+                if (targetDeviceId && targetDeviceId !== deviceId) return;
+                if (ruleName === 'DEVICE_OFFLINE') {
+                    setDeviceStatus('offline');
+                    if (statusText) statusText.textContent = '离线';
+                    showToast('⚠ ' + (deviceId || '设备') + ' 离线: ' + desc, 'warning');
+                }
+            }
+
+            // ========== 消息处理 ==========
+            function handleMessage(obj) {
+                // 设备过滤
+                if (targetDeviceId && targetDeviceId !== obj.Device) {
+                    return;
+                }
+
+                device.textContent = obj.Device || '--';
+                if (aiMonitor) aiMonitor.showDevice(obj.Device);
+                if (navTitle) navTitle.textContent = obj.Device || targetDeviceId || '设备详情';
+
+                floor.textContent = obj.Floor || '--';
+                toFloor.textContent = obj.ToFloor || '--';
+                speed.textContent = obj.Speed || '--';
+                runtime.textContent = obj.Runtime || '--';
+                distance.textContent = obj.Distance || '--';
+                times.textContent = obj.Times || '--';
+
+                switch (obj.Status) {
+                    case '00': statusText.textContent = '正常'; break;
+                    case '01': statusText.textContent = '异常'; break;
+                    case '02': statusText.textContent = '未知'; break;
+                    default: statusText.textContent = '--'; break;
+                }
+
+                switch (obj.Direction) {
+                    case '00': direction.textContent = ' '; break;
+                    case '01': direction.textContent = '▲'; break;
+                    case '02': direction.textContent = '▼'; break;
+                    default: direction.textContent = '-'; break;
+                }
+
+                switch (obj.Door) {
+                    case '00': door.textContent = '关门到位'; break;
+                    case '01': door.textContent = '开门到位'; break;
+                    case '02': door.textContent = '关门中'; break;
+                    case '03': door.textContent = '开门中'; break;
+                    default: door.textContent = '--'; break;
+                }
+
+                switch (obj.Passenger) {
+                    case '00': passenger.textContent = '无乘客'; break;
+                    case '01': passenger.textContent = '有乘客'; break;
+                    default: passenger.textContent = '--'; break;
+                }
+
+                resetAllAlarms();
+                var alarmStr = obj.Alarm || '';
+                if (alarmStr) {
+                    var matched = false;
+                    for (var code in ALARM_MAP) {
+                        if (alarmStr.indexOf(code) > -1) {
+                            setAlarmOn(ALARM_MAP[code]);
+                            matched = true;
+                        }
+                    }
+                    if (!matched) {
+                        if (alarmStr.indexOf('LEVELING') > -1 || alarmStr.indexOf('TIMEOUT') > -1) setAlarmOn(0);
+                        if (alarmStr.indexOf('ALARM_FIELD') > -1) setAlarmOn(0);
+                        if (alarmStr.indexOf('LOW_SPEED') > -1) setAlarmOn(2);
+                        if (alarmStr.indexOf('SPEED_ABNORMAL') > -1) setAlarmOn(1);
+                        if (alarmStr.indexOf('OVER_TOP') > -1) setAlarmOn(3);
+                        if (alarmStr.indexOf('FLOOR_JUMP') > -1) setAlarmOn(4);
+                        if (alarmStr.indexOf('DOOR_OPEN_RUNNING') > -1) {
+                            setAlarmOn(5);
+                            if (obj.Passenger === '01') setAlarmOn(6);
+                        }
+                        if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(5);
+                        if (alarmStr.indexOf('LONG_IDLE') > -1 || alarmStr.indexOf('IDLE') > -1) setAlarmOn(7);
+                        if (alarmStr.indexOf('DEVICE_OFFLINE') > -1 || alarmStr.indexOf('OFFLINE') > -1) setAlarmOn(7);
+                        if (alarmStr.indexOf('HARDWARE_FAULT') > -1) setAlarmOn(7);
+                        if (alarmStr.indexOf('DIRECTION') > -1) setAlarmOn(7);
+                    }
+                }
+
+                lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
+                lastDataTime = Date.now();
+                if (alarmStr.indexOf('DEVICE_OFFLINE') > -1) {
+                    setDeviceStatus('offline');
+                    if (statusText) statusText.textContent = '离线';
+                } else {
+                    setDeviceStatus('online');
+                    if (statusText && statusText.textContent === '离线') {
+                        statusText.textContent = '正常';
+                    }
+                    aiAlertDismissed = false;
+                }
+            }
+
+            function resetAllAlarms() {
+                for (var i = 0; i < 8; i++) {
+                    var code = (i < 10 ? '0' : '') + i;
+                    var item = alarmItems[code];
+                    var icon = alarmTexts[code];
+                    if (item) item.className = 'list-group-item font-thin';
+                    if (icon) icon.textContent = '○';
+                }
+                if (speed) speed.className = 'font-thin h2';
+            }
+
+            function setAlarmOn(index) {
+                var code = (index < 10 ? '0' : '') + index;
                 var item = alarmItems[code];
                 var icon = alarmTexts[code];
-                if (item) item.className = 'list-group-item font-thin';
-                if (icon) icon.textContent = '\u25CB';
+                if (item) item.className = 'list-group-item font-thin list-group-item-alarm';
+                if (icon) icon.textContent = '☉';
+                if (index === 1 && speed) speed.className = 'font-thin h2 list-group-item-alarm';
             }
-            if (speed) speed.className = 'font-thin h2';
-        }
 
-        function setAlarmOn(index) {
-            var code = (index < 10 ? '0' : '') + index;
-            var item = alarmItems[code];
-            var icon = alarmTexts[code];
-            if (item) item.className = 'list-group-item font-thin list-group-item-alarm';
-            if (icon) icon.textContent = '\u2609';
-            if (index === 1 && speed) speed.className = 'font-thin h2 list-group-item-alarm';
-        }
-
-        // ========== Toast 提示 ==========
-        function showToast(message, type) {
-            toast.textContent = message;
-            toast.className = 'toast ' + (type || '') + ' show';
-            clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(function() {
-                toast.className = 'toast';
-            }, 3000);
-        }
-
-        // ========== 日期格式化 ==========
-        function dateFtt(fmt, date) {
-            var o = {
-                'M+': date.getMonth() + 1,
-                'd+': date.getDate(),
-                'h+': date.getHours(),
-                'm+': date.getMinutes(),
-                's+': date.getSeconds(),
-                'q+': Math.floor((date.getMonth() + 3) / 3),
-                'S' : date.getMilliseconds()
-            };
-            if (/(y+)/.test(fmt))
-                fmt = fmt.replace(RegExp.$1, (date.getFullYear() + '').substr(4 - RegExp.$1.length));
-            for (var k in o)
-                if (new RegExp('(' + k + ')').test(fmt))
-                    fmt = fmt.replace(RegExp.$1, (RegExp.$1.length === 1) ? (o[k]) : (('00' + o[k]).substr(('' + o[k]).length)));
-            return fmt;
-        }
-
-        // ========== URL 参数获取 ==========
-        function getQueryString(name) {
-            var reg = new RegExp('(^|&)' + name + '=([^&]*)(&|$)');
-            var r = window.location.search.substr(1).match(reg);
-            if (r != null) return decodeURIComponent(r[2]);
-            return null;
-        }
-
-        // ========== 清理 ==========
-        window.addEventListener('beforeunload', function() {
-            clearReconnectTimer();
-            if (ws) {
-                ws.onclose = null;
-                ws.close();
+            // ========== Toast ==========
+            function showToast(message, type) {
+                toast.textContent = message;
+                toast.className = 'toast ' + (type || '') + ' show';
+                clearTimeout(toast._timeout);
+                toast._timeout = setTimeout(function () {
+                    toast.className = 'toast';
+                }, 3500);
             }
-        });
 
-        // ========== 启动 ==========
-        lastUpdateTime.textContent = '正在连接...';
-        connectWebSocket();
-        startStaleCheck();
+            // ========== 日期格式化 ==========
+            function dateFtt(fmt, date) {
+                var o = {
+                    'M+': date.getMonth() + 1,
+                    'd+': date.getDate(),
+                    'h+': date.getHours(),
+                    'm+': date.getMinutes(),
+                    's+': date.getSeconds(),
+                    'q+': Math.floor((date.getMonth() + 3) / 3),
+                    'S': date.getMilliseconds()
+                };
+                if (/(y+)/.test(fmt))
+                    fmt = fmt.replace(RegExp.$1, (date.getFullYear() + '').substr(4 - RegExp.$1.length));
+                for (var k in o)
+                    if (new RegExp('(' + k + ')').test(fmt))
+                        fmt = fmt.replace(RegExp.$1, (RegExp.$1.length === 1) ? (o[k]) : (('00' + o[k]).substr(('' + o[k]).length)));
+                return fmt;
+            }
 
-    })();
+            // ========== URL 参数获取 ==========
+            function getQueryString(name) {
+                var reg = new RegExp('(^|&)' + name + '=([^&]*)(&|$)');
+                var r = window.location.search.substr(1).match(reg);
+                if (r != null) return decodeURIComponent(r[2]);
+                return null;
+            }
+
+            // ========== 清理 ==========
+            window.addEventListener('beforeunload', function () {
+                clearReconnectTimer();
+                if (ws) {
+                    ws.onclose = null;
+                    ws.close();
+                }
+            });
+
+            // ========== 启动 ==========
+            lastUpdateTime.textContent = '正在连接...';
+            connectWebSocket();
+            startStaleCheck();
+
+        })();
     </script>
 </body>
+
 </html>
