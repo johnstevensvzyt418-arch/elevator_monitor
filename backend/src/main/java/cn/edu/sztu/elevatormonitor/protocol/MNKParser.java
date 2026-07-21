@@ -299,7 +299,6 @@ public class MNKParser implements ProtocolParser<MNKFrame> {
      *     30/31/36/37 → 00 平层
      *     34          → 01 上行
      *     35          → 02 下行
-     *     38          → 03 硬件故障(0x80)
      * </pre>
      */
     private String parseDirection(String seg3) throws ProtocolParseException {
@@ -307,7 +306,7 @@ public class MNKParser implements ProtocolParser<MNKFrame> {
         if (dit.matches("[3][0167]")) return "00"; // 平层
         if ("34".equals(dit)) return "01";           // 上行
         if ("35".equals(dit)) return "02";           // 下行
-        if ("38".equals(dit)) return "03";           // 硬件故障(0x80)
+        if ("38".equals(dit)) return "03";           // 故障（0x80硬件故障）
         throw new ProtocolParseException("MNK-022", "非法运行方向: " + dit);
     }
 

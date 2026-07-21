@@ -52,7 +52,7 @@
                 </div>
                 <div class="card-floor-info b-light b-t">
                     <div class="card-floor-info-card b-light b-r">
-                        <span class="card-floor-info-card-title">数据报量</span>
+                        <span class="card-floor-info-card-title">运行次数</span>
                         <div class="font-thin h2"><span id="times">获取中</span></div>
                     </div>
                     <div class="card-floor-info-card">
@@ -206,11 +206,13 @@
                     var obj = JSON.parse(msg.data);
                     // AI 结果 / 规则告警消息单独处理
                     if (obj.type === 'ai_result') {
-                        // 检查是否为规则告警（DEVICE_OFFLINE 等）
+                        // 规则告警（有 RuleName 字段）：仅触发告警处理，不传给 AI 面板
                         if (obj.data && obj.data.RuleName) {
                             console.log('[AI-Monitor] 收到规则告警:', obj.data.RuleName, obj.data.DeviceId);
                             handleRuleAlarm(obj.data);
+                            return;
                         }
+                        // AI 推理结果：传给 AI 面板渲染异常得分
                         if (aiMonitor) {
                             aiMonitor.handle(obj.data);
                         } else {
@@ -380,6 +382,7 @@
                     if (alarmStr.indexOf('ALARM_FIELD') > -1) setAlarmOn(0);
                     if (alarmStr.indexOf('LOW_SPEED') > -1) setAlarmOn(2);
                     if (alarmStr.indexOf('SPEED_ABNORMAL') > -1) setAlarmOn(1);
+                    else if (alarmStr.indexOf('SPEED') > -1) setAlarmOn(1);
                     if (alarmStr.indexOf('OVER_TOP') > -1) setAlarmOn(3);
                     if (alarmStr.indexOf('FLOOR_JUMP') > -1) setAlarmOn(4);
                     if (alarmStr.indexOf('DOOR_OPEN_RUNNING') > -1) {

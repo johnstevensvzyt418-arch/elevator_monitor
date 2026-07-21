@@ -168,9 +168,11 @@ public class MNKService implements ElevatorService {
             // 基于 Redis 的有状态速度计算（跨请求累积，修复 SPEED_ABNORMAL 无法触发）
             double trackedSpeed = speedTrackingService.calculateAndUpdateSpeed(
                     elevatorMessage.getDeviceId(), curFloor, time);
-            elevatorMessage.setSpeed(trackedSpeed);
-            LOGGER.debug("[MNK] Redis速度追踪: deviceId={}, speed={}m/s",
-                    elevatorMessage.getDeviceId(), trackedSpeed);
+            if (trackedSpeed > 0.0) {
+                elevatorMessage.setSpeed(trackedSpeed);
+                LOGGER.debug("[MNK] Redis速度追踪: deviceId={}, speed={}m/s",
+                        elevatorMessage.getDeviceId(), trackedSpeed);
+            }
 
             // 乘客
             elevatorMessage.setPassenger();

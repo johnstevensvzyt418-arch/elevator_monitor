@@ -112,3 +112,5 @@ Desktop.ini
 *.swp
 *.bak-codex
 *.bak-*
+*.patch
+*.code-workspace

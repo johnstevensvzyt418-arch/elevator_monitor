@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -251,6 +252,9 @@ func main() {
 
 	// 无过滤监控页面（显示所有设备数据）
 	r.GET("/monitor", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		c.Header("Pragma", "no-cache")
+		c.Header("Expires", "0")
 		c.HTML(200, "index1.html", nil)
 	})
 
@@ -262,7 +266,56 @@ func main() {
 
 	//设置静态资源目录
 	r.Static("/static", "./static")
-	r.Static("/html", "./html")
+
+	// 设备快照：页面刷新后立即恢复设备列表，再由 WebSocket 接续实时更新。
+	r.GET("/api/devices", func(c *gin.Context) {
+		if redisQueryClient == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "REDIS_UNAVAILABLE"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		entries, err := redisQueryClient.HGetAll(ctx, "elevator:status").Result()
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "DEVICE_SNAPSHOT_UNAVAILABLE"})
+			return
+		}
+
+		type deviceSnapshot struct {
+			DeviceID string          `json:"-"`
+			Data     json.RawMessage `json:"data"`
+			LastSeen int64           `json:"lastSeen"`
+		}
+		items := make([]deviceSnapshot, 0, len(entries))
+		for field, raw := range entries {
+			if !json.Valid([]byte(raw)) {
+				continue
+			}
+			var status struct {
+				Device string `json:"Device"`
+			}
+			if err := json.Unmarshal([]byte(raw), &status); err != nil || status.Device == "" {
+				continue
+			}
+			deviceID := status.Device
+			if deviceID == "" {
+				deviceID = field
+			}
+			lastSeen, _ := redisQueryClient.HGet(
+				ctx, "elevator:timestamps:"+deviceID, "lastMessageTime",
+			).Int64()
+			items = append(items, deviceSnapshot{
+				DeviceID: deviceID,
+				Data:     json.RawMessage(raw),
+				LastSeen: lastSeen * 1000,
+			})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].DeviceID < items[j].DeviceID })
+
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	})
 
 	// AI 最近推理历史：同源接口避免跨域，页面刷新后可恢复最近 60 个得分点。
 	r.GET("/api/ai/history/:deviceId", func(c *gin.Context) {

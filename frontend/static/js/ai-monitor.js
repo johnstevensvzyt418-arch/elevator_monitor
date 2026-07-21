@@ -24,10 +24,10 @@
             '</div>',
             '<div class="ai-panel-content">',
                 '<div class="ai-metrics">',
-                    '<div class="ai-metric ai-metric-primary"><span>当前得分</span><strong data-ai="score">--</strong></div>',
+                    '<div class="ai-metric ai-metric-primary"><span>异常得分</span><strong data-ai="score">--</strong></div>',
                     '<div class="ai-metric"><span>判定阈值</span><strong data-ai="threshold">--</strong></div>',
-                    '<div class="ai-metric"><span>最近峰值</span><strong data-ai="peak">--</strong></div>',
-                    '<div class="ai-metric"><span>超阈次数</span><strong data-ai="overCount">0</strong></div>',
+                    '<div class="ai-metric"><span>距离阈值</span><strong data-ai="distance">--</strong></div>',
+                    '<div class="ai-metric"><span>更新时间</span><strong class="ai-time-value" data-ai="time">--</strong></div>',
                 '</div>',
                 '<div class="ai-trend-head">',
                     '<div><strong>异常得分趋势</strong><span class="ai-history-note">最近 60 次推理</span></div>',
@@ -42,16 +42,21 @@
                     '<canvas class="ai-trend" data-ai="trend" height="220" aria-label="AI 异常得分曲线，包含阈值和风险区域"></canvas>',
                     '<div class="ai-chart-tooltip" data-ai="tooltip" hidden></div>',
                 '</div>',
+                '<div class="ai-summary-grid">',
+                    '<div class="ai-summary-item"><span>本次峰值</span><strong data-ai="peak">--</strong></div>',
+                    '<div class="ai-summary-item"><span>超阈次数</span><strong data-ai="overCount">0</strong></div>',
+                    '<div class="ai-summary-item"><span>窗口进度</span><strong data-ai="windowProgress">0/10</strong></div>',
+                    '<div class="ai-summary-item"><span>AI服务</span><strong data-ai="service">等待</strong></div>',
+                '</div>',
                 '<div class="ai-panel-foot">',
                     '<span class="ai-foot-dot"></span>',
                     '<span data-ai="detail">等待设备上报</span>',
-                    '<time data-ai="time">--</time>',
                 '</div>',
             '</div>'
         ].join('');
 
         this.nodes = {};
-        var names = ['state', 'score', 'threshold', 'peak', 'overCount', 'time', 'device', 'trend', 'tooltip', 'detail'];
+        var names = ['state', 'score', 'threshold', 'distance', 'peak', 'overCount', 'windowProgress', 'service', 'time', 'device', 'trend', 'tooltip', 'detail'];
         for (var i = 0; i < names.length; i++) {
             this.nodes[names[i]] = this.root.querySelector('[data-ai="' + names[i] + '"]');
         }
@@ -202,21 +207,27 @@
         this.nodes.time.textContent = formatTime(record.updatedAt);
         this.nodes.peak.textContent = stats.count ? stats.peak.toFixed(2) : '--';
         this.nodes.overCount.textContent = String(stats.overCount);
+        this.nodes.windowProgress.textContent = Math.min(record.sampleCount || 0, record.requiredSamples || 10) + '/' + (record.requiredSamples || 10);
+        this.nodes.service.textContent = state === 'UNAVAILABLE' ? '异常' : '正常';
+        this.nodes.service.className = state === 'UNAVAILABLE' ? 'ai-negative' : 'ai-positive';
 
         if (record.ready && isFinite(record.score) && isFinite(record.threshold)) {
             this.nodes.score.textContent = record.score.toFixed(2);
             this.nodes.threshold.textContent = record.threshold.toFixed(2);
+            this.nodes.distance.textContent = Math.abs(record.threshold - record.score).toFixed(2);
             this.nodes.detail.textContent = record.score > record.threshold
                 ? '得分已超过阈值，请检查运行状态'
                 : '最近得分处于正常范围';
         } else {
             this.nodes.score.textContent = '--';
             this.nodes.threshold.textContent = '--';
+            this.nodes.distance.textContent = '--';
             this.nodes.detail.textContent = state === 'UNAVAILABLE'
                 ? 'AI 服务暂时无响应'
                 : '正在采集 ' + record.sampleCount + ' / ' + record.requiredSamples + ' 个样本';
         }
         this.drawTrend();
+        if (typeof this.options.onUpdate === 'function') this.options.onUpdate(record);
     };
 
     AiMonitor.prototype.renderEmpty = function (deviceId) {
@@ -228,12 +239,25 @@
         this.nodes.state.textContent = '等待数据';
         this.nodes.score.textContent = '--';
         this.nodes.threshold.textContent = '--';
+        this.nodes.distance.textContent = '--';
         this.nodes.peak.textContent = stats.count ? stats.peak.toFixed(2) : '--';
         this.nodes.overCount.textContent = String(stats.overCount);
+        this.nodes.windowProgress.textContent = '0/10';
+        this.nodes.service.textContent = '等待';
+        this.nodes.service.className = '';
         this.nodes.time.textContent = '--';
         this.nodes.device.textContent = id || '未选择设备';
         this.nodes.detail.textContent = id ? '等待该设备上报' : '等待设备上报';
         this.drawTrend();
+        if (typeof this.options.onUpdate === 'function') {
+            this.options.onUpdate({
+                deviceId: id,
+                state: 'WAITING',
+                ready: false,
+                sampleCount: 0,
+                requiredSamples: 10
+            });
+        }
     };
 
     AiMonitor.prototype.getStats = function (deviceId) {

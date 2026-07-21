@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>电梯状态监控页面</title>
-    <link rel="stylesheet" type="text/css" href="/static/css/main.css">
+    <link rel="stylesheet" type="text/css" href="/static/css/main.css?v=20260720-alarm-3">
 </head>
 
 <body>
@@ -14,21 +14,64 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <div class="card">
-        <div class="card-title b-light b-b">
-            <div class="font-thin h5">
-                电梯ID：<span id="device">获取中</span>
+    <main class="card monitor-card">
+        <header class="monitor-header">
+            <div class="monitor-brand">
+                <span class="monitor-brand-mark" aria-hidden="true">EM</span>
+                <div>
+                    <strong>电梯物联网监控系统</strong>
+                    <small>设备状态与 AI 风险联动</small>
+                </div>
             </div>
-            <div class="font-thin h5">
-                最后更新时间：<span id="lastUpdateTime">正在获取数据中</span>
+            <div class="system-stats" aria-label="系统概况">
+                <span><i class="system-dot system-dot-online"></i>在线设备 <strong id="onlineCount">0</strong></span>
+                <span><i class="system-dot system-dot-offline"></i>离线设备 <strong id="offlineCount">0</strong></span>
+                <span><i class="system-dot system-dot-alarm"></i>当前告警 <strong id="currentAlarmCount">0</strong></span>
+                <time id="systemClock">--:--:--</time>
             </div>
-            <div class="font-thin h5" style="margin-left:auto;">
-                <span class="status-dot disconnected" id="statusDot"></span>
-                设备状态：<span id="connectionStatus">等待数据</span>
-            </div>
-        </div>
-        <div class="card-main">
-            <div class="card-main-harf b-light b-r">
+        </header>
+
+        <div class="monitor-grid">
+            <aside class="monitor-column device-column" aria-label="设备列表">
+                <div class="column-heading">
+                    <div>
+                        <span class="column-kicker">DEVICE</span>
+                        <h2>设备列表</h2>
+                    </div>
+                    <span class="column-count" id="deviceCount">0 台</span>
+                </div>
+                <label class="device-search">
+                    <span aria-hidden="true">⌕</span>
+                    <input id="deviceSearch" type="search" placeholder="搜索设备 ID" autocomplete="off">
+                </label>
+                <div class="device-filters" id="deviceFilters" aria-label="设备筛选">
+                    <button class="active" type="button" data-filter="all">全部 <strong id="allCount">0</strong></button>
+                    <button type="button" data-filter="online">在线 <strong id="filterOnlineCount">0</strong></button>
+                    <button type="button" data-filter="offline">离线 <strong id="filterOfflineCount">0</strong></button>
+                </div>
+                <div class="device-list" id="deviceList">
+                    <div class="device-list-empty">
+                        <span class="device-list-empty-mark">···</span>
+                        <strong>等待设备上报</strong>
+                        <small>收到数据后可在这里切换电梯</small>
+                    </div>
+                </div>
+            </aside>
+
+            <section class="monitor-column status-column" aria-label="电梯实时运行状态">
+                <div class="column-heading status-heading">
+                    <div>
+                        <span class="column-kicker">LIVE STATUS</span>
+                        <h2>电梯实时状态</h2>
+                    </div>
+                </div>
+                <div class="status-meta">
+                    <span>设备 ID：<strong id="device">获取中</strong></span>
+                    <span>运行时间：<strong id="runtime">--</strong></span>
+                    <span><i class="status-dot disconnected" id="statusDot"></i><strong id="connectionStatus">未连接</strong></span>
+                    <time id="lastUpdateTime">正在获取数据中</time>
+                </div>
+                <div class="elevator-status-body">
                 <div class="card-floor-show">
                     <div class="card-floor-show-floortext">
                         <span id="direction">-</span> <span id="floor">00</span>
@@ -57,9 +100,31 @@
                         <div class="font-thin h2"><span id="speed">获取中</span></div>
                     </div>
                 </div>
-            </div>
-            <div class="card-main-harf">
-                <ul class="list-group list-group-lg m-b-none">
+                <div class="card-floor-info b-light b-t b-b">
+                    <div class="card-floor-info-card b-light b-r">
+                        <span class="card-floor-info-card-title">运行次数</span>
+                        <div class="font-thin h2"><span id="times">--</span></div>
+                    </div>
+                    <div class="card-floor-info-card">
+                        <span class="card-floor-info-card-title">运行里程</span>
+                        <div class="font-thin h2"><span id="distance">--</span></div>
+                    </div>
+                </div>
+                <div class="card-floor-info ai-warning-row b-light b-t b-b">
+                    <div class="card-floor-info-card ai-warning-card">
+                        <span class="card-floor-info-card-title">AI预警</span>
+                        <div class="ai-warning-value ai-warning-waiting" id="aiWarning">等待数据</div>
+                        <small class="ai-warning-detail" id="aiWarningDetail">选择设备后显示判断结果</small>
+                    </div>
+                </div>
+                </div>
+
+                <div class="alarm-section">
+                    <div class="alarm-section-head">
+                        <strong>设备告警</strong>
+                        <span>协议规则实时状态</span>
+                    </div>
+                    <ul class="list-group alarm-grid list-group-lg m-b-none">
                     <li class="list-group-item font-thin" id="alarm_00">
                         <span class="list-group-item-status" id="alarm_00_text">○</span>
                         <span class="list-group-item-text">困人</span>
@@ -92,13 +157,15 @@
                         <span class="list-group-item-status" id="alarm_07_text">○</span>
                         <span class="list-group-item-text">检修状态</span>
                     </li>
-                </ul>
-            </div>
-        </div>
-        <div class="ai-panel" id="aiPanel"></div>
-    </div>
+                    </ul>
+                </div>
+            </section>
 
-    <script src="/static/js/ai-monitor.js"></script>
+            <section class="ai-panel" id="aiPanel" aria-label="AI异常检测"></section>
+        </div>
+    </main>
+
+    <script src="/static/js/ai-monitor.js?v=20260720-3col-2"></script>
     <script>
     (function() {
         'use strict';
@@ -113,25 +180,35 @@
         var statusText = document.getElementById("status-text");
         var passenger = document.getElementById("passenger");
         var speed = document.getElementById("speed");
+        var runtime = document.getElementById("runtime");
+        var times = document.getElementById("times");
+        var distance = document.getElementById("distance");
         var connectionStatus = document.getElementById("connectionStatus");
         var statusDot = document.getElementById("statusDot");
         var toast = document.getElementById("toast");
-        var aiMonitor = null;
-        try {
-            if (typeof window.AiMonitor === 'undefined') {
-                console.error('[AI-Monitor] ai-monitor.js 未加载，AI 异常检测不可用');
-            } else {
-                aiMonitor = window.AiMonitor.init({
-                    rootId: 'aiPanel',
-                    onAbnormal: function(result) {
-                        showToast('AI 检测到 ' + result.deviceId + ' 异常，请及时核查', 'warning');
-                    }
-                });
-                console.log('[AI-Monitor] 初始化完成 (无过滤模式)');
+        var deviceList = document.getElementById("deviceList");
+        var deviceCount = document.getElementById("deviceCount");
+        var deviceSearch = document.getElementById("deviceSearch");
+        var deviceFilters = document.getElementById("deviceFilters");
+        var onlineCount = document.getElementById("onlineCount");
+        var offlineCount = document.getElementById("offlineCount");
+        var currentAlarmCount = document.getElementById("currentAlarmCount");
+        var allCount = document.getElementById("allCount");
+        var filterOnlineCount = document.getElementById("filterOnlineCount");
+        var filterOfflineCount = document.getElementById("filterOfflineCount");
+        var systemClock = document.getElementById("systemClock");
+        var aiWarning = document.getElementById("aiWarning");
+        var aiWarningDetail = document.getElementById("aiWarningDetail");
+        var deviceStates = {};
+        var selectedDeviceId = '';
+        var activeDeviceFilter = 'all';
+        var aiMonitor = window.AiMonitor.init({
+            rootId: 'aiPanel',
+            onUpdate: updateAiWarning,
+            onAbnormal: function(result) {
+                showToast('AI 检测到 ' + result.deviceId + ' 异常，请及时核查', 'warning');
             }
-        } catch(e) {
-            console.error('[AI-Monitor] 初始化失败:', e);
-        }
+        });
 
         // ========== 报警列表项缓存 ==========
         var alarmItems = {};
@@ -154,12 +231,6 @@
         var reconnectDelay = 1000;
         var maxReconnectDelay = 30000;
 
-        // ========== 设备数据超时检测 ==========
-        var lastDataTime = 0;           // 最后一次收到设备数据的时间戳
-        var staleCheckTimer = null;     // 超时检测定时器
-        var STALE_THRESHOLD = 120000;   // 120 秒无数据视为设备离线
-        var wsConnected = false;        // WebSocket 是否连通
-
         function connectWebSocket() {
             if (ws) {
                 try { ws.close(); } catch(e) {}
@@ -171,10 +242,8 @@
             ws.onopen = function() {
                 clearReconnectTimer();
                 reconnectDelay = 1000;
-                wsConnected = true;
-                if (lastDataTime === 0) {
-                    setDeviceStatus('waiting');
-                }
+                setConnectionStatus(true);
+                statusText.textContent = '已连接';
                 lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
                 showToast('已连接到监控服务器', 'success');
             };
@@ -183,26 +252,28 @@
                 try {
                     var obj = JSON.parse(msg.data);
                     if (obj.type === 'ai_result') {
+                        // 规则告警（有 RuleName 字段）：仅触发告警处理，不传给 AI 面板
                         if (obj.data && obj.data.RuleName) {
                             console.log('[AI-Monitor] 收到规则告警:', obj.data.RuleName, obj.data.DeviceId);
                             handleRuleAlarm(obj.data);
+                            renderDeviceList();
+                            return;
                         }
-                        if (aiMonitor) {
-                            aiMonitor.handle(obj.data);
-                        } else {
-                            console.warn('[AI-Monitor] aiMonitor 未初始化，丢弃 ai_result 消息');
+                        // AI 推理结果：传给 AI 面板渲染异常得分
+                        aiMonitor.handle(obj.data);
+                        renderDeviceList();
+                        var aiDeviceId = String(obj.data.deviceId || obj.data.Device || '');
+                        if (aiDeviceId === selectedDeviceId && aiMonitor.records[aiDeviceId]) {
+                            updateAiWarning(aiMonitor.records[aiDeviceId]);
                         }
                         return;
                     }
                     handleMessage(obj);
-                } catch(e) {
-                    console.error('[WS] 消息处理异常:', e, msg.data);
-                }
+                } catch(e) {}
             };
 
             ws.onclose = function() {
-                wsConnected = false;
-                setDeviceStatus('disconnected');
+                setConnectionStatus(false);
                 scheduleReconnect();
             };
 
@@ -225,64 +296,51 @@
             }
         }
 
-        /**
-         * 设置设备状态显示。
-         * @param {'online'|'offline'|'waiting'|'disconnected'} state
-         */
-        function setDeviceStatus(state) {
-            switch (state) {
-                case 'online':
-                    connectionStatus.textContent = '设备在线';
-                    statusDot.className = 'status-dot connected';
-                    break;
-                case 'offline':
-                    connectionStatus.textContent = '设备离线';
-                    statusDot.className = 'status-dot disconnected';
-                    break;
-                case 'waiting':
-                    connectionStatus.textContent = '等待数据';
-                    statusDot.className = 'status-dot disconnected';
-                    break;
-                case 'disconnected':
-                    connectionStatus.textContent = '服务断开';
-                    statusDot.className = 'status-dot disconnected';
-                    break;
+        function setConnectionStatus(connected) {
+            if (connected) {
+                connectionStatus.textContent = '已连接';
+                statusDot.className = 'status-dot connected';
+            } else {
+                connectionStatus.textContent = '已断开';
+                statusDot.className = 'status-dot disconnected';
             }
         }
 
         /**
-         * 启动设备数据超时检测，每 5 秒检查一次。
-         */
-        function startStaleCheck() {
-            if (staleCheckTimer) clearInterval(staleCheckTimer);
-            staleCheckTimer = setInterval(function() {
-                var now = Date.now();
-                if (lastDataTime > 0 && wsConnected && (now - lastDataTime) > STALE_THRESHOLD) {
-                    setDeviceStatus('offline');
-                    if (statusText) statusText.textContent = '离线';
-                }
-            }, 5000);
-        }
-
-        /**
-         * 处理规则引擎告警（DEVICE_OFFLINE 等）。
+         * 处理规则引擎告警（DEVICE_OFFLINE / DOOR_OPEN_TOO_LONG 等）。
          */
         function handleRuleAlarm(data) {
             var deviceId = data.DeviceId || '';
             var ruleName = data.RuleName || '';
             var desc = data.Description || '';
             if (ruleName === 'DEVICE_OFFLINE') {
-                setDeviceStatus('offline');
-                if (statusText) statusText.textContent = '离线';
+                if (deviceStates[deviceId]) {
+                    deviceStates[deviceId].lastSeen = 0;
+                }
                 showToast('⚠ ' + (deviceId || '设备') + ' 离线: ' + desc, 'warning');
             }
         }
 
         // ========== 消息处理 ==========
-        function handleMessage(obj) {
+        function handleMessage(obj, snapshotLastSeen) {
+            var incomingDeviceId = String(obj.Device || '');
+            if (!incomingDeviceId) return;
+
+            deviceStates[incomingDeviceId] = {
+                data: obj,
+                lastSeen: Number(snapshotLastSeen) || Date.now()
+            };
+            if (!selectedDeviceId) {
+                selectedDeviceId = incomingDeviceId;
+                aiMonitor.showDevice(incomingDeviceId);
+            }
+            renderDeviceList();
+            if (selectedDeviceId === incomingDeviceId) renderElevatorState(obj);
+        }
+
+        function renderElevatorState(obj) {
             // 设备 ID（使用 textContent 防 XSS）
             device.textContent = obj.Device || '--';
-            if (aiMonitor) aiMonitor.showDevice(obj.Device);
 
             // 楼层
             floor.textContent = obj.Floor || '--';
@@ -290,6 +348,9 @@
 
             // 速度
             speed.textContent = obj.Speed || '--';
+            runtime.textContent = obj.Runtime || '--';
+            times.textContent = obj.Times || '--';
+            distance.textContent = obj.Distance || '--';
 
             // 状态
             switch(obj.Status) {
@@ -356,20 +417,151 @@
                 }
             }
 
-            // 更新时间 & 刷新设备在线状态
+            // 更新时间
             lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
-            lastDataTime = Date.now();
-            // 如果告警中已包含 DEVICE_OFFLINE，不要覆盖为在线
-            if (alarmStr.indexOf('DEVICE_OFFLINE') > -1) {
-                setDeviceStatus('offline');
-                if (statusText) statusText.textContent = '离线';
-            } else {
-                setDeviceStatus('online');
-                if (statusText && statusText.textContent === '离线') {
-                    statusText.textContent = '正常';
-                }
+        }
+
+        function selectDevice(deviceId) {
+            var entry = deviceStates[deviceId];
+            if (!entry) return;
+            selectedDeviceId = deviceId;
+            renderDeviceList();
+            renderElevatorState(entry.data);
+            aiMonitor.showDevice(deviceId);
+            if (aiMonitor.records[deviceId]) updateAiWarning(aiMonitor.records[deviceId]);
+            else updateAiWarning({ deviceId: deviceId, state: 'WAITING', ready: false });
+        }
+
+        function renderDeviceList() {
+            var ids = Object.keys(deviceStates).sort(function(a, b) {
+                return deviceStates[b].lastSeen - deviceStates[a].lastSeen;
+            });
+            var now = Date.now();
+            var online = 0;
+            var alarms = 0;
+            var searchValue = (deviceSearch.value || '').trim().toLowerCase();
+            var visible = [];
+
+            for (var i = 0; i < ids.length; i++) {
+                var id = ids[i];
+                var entry = deviceStates[id];
+                var onlineState = now - entry.lastSeen < 90000;
+                var aiRecord = aiMonitor.records[id];
+                var alarmState = entry.data.Status === '01' || !!entry.data.Alarm ||
+                    (aiRecord && aiRecord.state === 'ABNORMAL');
+                if (onlineState) online++;
+                if (alarmState) alarms++;
+                if (searchValue && id.toLowerCase().indexOf(searchValue) === -1) continue;
+                if (activeDeviceFilter === 'online' && !onlineState) continue;
+                if (activeDeviceFilter === 'offline' && onlineState) continue;
+                visible.push({ id: id, entry: entry, online: onlineState, alarm: alarmState, ai: aiRecord });
+            }
+
+            deviceCount.textContent = ids.length + ' 台';
+            onlineCount.textContent = String(online);
+            offlineCount.textContent = String(ids.length - online);
+            currentAlarmCount.textContent = String(alarms);
+            allCount.textContent = String(ids.length);
+            filterOnlineCount.textContent = String(online);
+            filterOfflineCount.textContent = String(ids.length - online);
+
+            while (deviceList.firstChild) deviceList.removeChild(deviceList.firstChild);
+            if (!visible.length) {
+                var empty = document.createElement('div');
+                empty.className = 'device-list-empty';
+                empty.innerHTML = '<span class="device-list-empty-mark">···</span><strong>' +
+                    (ids.length ? '没有符合条件的设备' : '等待设备上报') +
+                    '</strong><small>' + (ids.length ? '请调整搜索或筛选条件' : '收到数据后可在这里切换电梯') + '</small>';
+                deviceList.appendChild(empty);
+                return;
+            }
+
+            for (var j = 0; j < visible.length; j++) {
+                var item = visible[j];
+                var button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'device-list-item' + (item.id === selectedDeviceId ? ' active' : '') +
+                    (item.alarm ? ' has-alarm' : '');
+                button.setAttribute('data-device-id', item.id);
+
+                var dot = document.createElement('span');
+                dot.className = 'device-presence ' + (item.online ? 'online' : 'offline');
+                button.appendChild(dot);
+
+                var copy = document.createElement('span');
+                copy.className = 'device-list-copy';
+                var name = document.createElement('strong');
+                name.textContent = item.id;
+                var meta = document.createElement('small');
+                var stateText = item.online ? '在线' : '离线';
+                if (item.ai && item.ai.state === 'ABNORMAL') stateText = 'AI预警';
+                meta.textContent = stateText + ' · ' + (item.entry.data.Floor || '--') + '楼 · ' + formatAge(now - item.entry.lastSeen);
+                copy.appendChild(name);
+                copy.appendChild(meta);
+                button.appendChild(copy);
+
+                var arrow = document.createElement('span');
+                arrow.className = 'device-list-arrow';
+                arrow.textContent = '›';
+                button.appendChild(arrow);
+                deviceList.appendChild(button);
             }
         }
+
+        function updateAiWarning(record) {
+            if (!record) return;
+            var recordDeviceId = String(record.deviceId || '');
+            if (selectedDeviceId && recordDeviceId && recordDeviceId !== selectedDeviceId) return;
+
+            var state = String(record.state || 'WAITING').toUpperCase();
+            var labels = {
+                NORMAL: '正常',
+                ABNORMAL: '异常预警',
+                COLLECTING: '采集中',
+                UNAVAILABLE: '服务不可用',
+                WAITING: '等待数据'
+            };
+            var styleState = state.toLowerCase();
+            if (!labels[state]) {
+                state = 'UNAVAILABLE';
+                styleState = 'unavailable';
+            }
+            aiWarning.textContent = labels[state];
+            aiWarning.className = 'ai-warning-value ai-warning-' + styleState;
+            if (record.ready && isFinite(record.score) && isFinite(record.threshold)) {
+                aiWarningDetail.textContent = '得分 ' + Number(record.score).toFixed(2) + ' / 阈值 ' + Number(record.threshold).toFixed(2);
+            } else if (state === 'COLLECTING') {
+                aiWarningDetail.textContent = '样本 ' + Number(record.sampleCount || 0) + ' / ' + Number(record.requiredSamples || 10);
+            } else {
+                aiWarningDetail.textContent = state === 'WAITING' ? '等待该设备的推理结果' : '请检查 AI 服务状态';
+            }
+            renderDeviceList();
+        }
+
+        function formatAge(milliseconds) {
+            var seconds = Math.max(0, Math.floor(milliseconds / 1000));
+            if (seconds < 60) return seconds + '秒前更新';
+            var minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return minutes + '分钟前更新';
+            return Math.floor(minutes / 60) + '小时前更新';
+        }
+
+        deviceList.addEventListener('click', function(event) {
+            var target = event.target;
+            while (target && target !== deviceList && !target.getAttribute('data-device-id')) target = target.parentNode;
+            if (target && target !== deviceList) selectDevice(target.getAttribute('data-device-id'));
+        });
+
+        deviceSearch.addEventListener('input', renderDeviceList);
+        deviceFilters.addEventListener('click', function(event) {
+            var button = event.target;
+            while (button && button !== deviceFilters && !button.getAttribute('data-filter')) button = button.parentNode;
+            if (!button || button === deviceFilters) return;
+            activeDeviceFilter = button.getAttribute('data-filter');
+            var buttons = deviceFilters.querySelectorAll('button');
+            for (var i = 0; i < buttons.length; i++) buttons[i].className = buttons[i] === button ? 'active' : '';
+            renderDeviceList();
+        });
 
         function resetAllAlarms() {
             for (var i = 0; i < 8; i++) {
@@ -430,9 +622,37 @@
         });
 
         // ========== 启动 ==========
+        function loadDeviceSnapshots() {
+            fetch('/api/devices', {
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json' }
+            })
+            .then(function(response) {
+                if (!response.ok) throw new Error('device snapshot request failed');
+                return response.json();
+            })
+            .then(function(payload) {
+                var items = Array.isArray(payload.items) ? payload.items : [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i] && items[i].data) handleMessage(items[i].data, items[i].lastSeen);
+                }
+                renderDeviceList();
+            })
+            .catch(function() {
+                renderDeviceList();
+            });
+        }
+
+        function updateSystemClock() {
+            systemClock.textContent = dateFtt('hh:mm:ss', new Date());
+        }
+        updateSystemClock();
+        renderDeviceList();
+        setInterval(updateSystemClock, 1000);
+        setInterval(renderDeviceList, 15000);
         lastUpdateTime.textContent = '正在连接...';
+        loadDeviceSnapshots();
         connectWebSocket();
-        startStaleCheck();
 
     })();
     </script>
