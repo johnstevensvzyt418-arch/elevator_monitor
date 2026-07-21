@@ -29,8 +29,8 @@ public class DoorOpenRunningRule implements AlarmRule {
         String dir = msg.getDirection();
         String door = msg.getDoorStatus();
 
-        // 仅在电梯运动中检测（方向非平层00）
-        if (dir == null || "00".equals(dir)) {
+        // 仅在电梯实际运动中检测（排除平层00和硬件故障03，两者均非运行状态）
+        if (dir == null || "00".equals(dir) || "03".equals(dir)) {
             return null;
         }
 
