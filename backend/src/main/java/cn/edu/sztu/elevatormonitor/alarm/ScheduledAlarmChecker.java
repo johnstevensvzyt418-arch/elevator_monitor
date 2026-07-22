@@ -11,7 +11,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 后台定时巡检任务 — 解决"事件驱动告警"在设备断连时无法触发的根本缺陷。
@@ -64,6 +66,9 @@ public class ScheduledAlarmChecker {
     @Value("${alarm.long-idle.threshold-seconds:60}")
     private int longIdleThresholdSeconds;
 
+    /** 巡检告警标记 key（HSET 子键），独立于规则告警，互不覆盖 */
+    private static final String MARKER_PATROL_ALARM = ":patrol_alarm";
+
     private final StringRedisTemplate stringRedisTemplate;
     private final LevelingTrackingService levelingTrackingService;
     private final ObjectMapper objectMapper;
@@ -102,6 +107,7 @@ public class ScheduledAlarmChecker {
 
                 try {
                     JsonNode node = objectMapper.readTree(json);
+                    Set<String> patrolAlarms = new LinkedHashSet<>();  // 本轮触发的巡检告警
 
                     // 更新/读取设备时间戳
                     String door = node.has("Door") ? node.get("Door").asText() : "";
@@ -118,7 +124,8 @@ public class ScheduledAlarmChecker {
                         long offlineSec = nowSec - lastMsgSec;
                         if (offlineSec >= offlineThresholdSeconds) {
                             LOGGER.warn("[巡检] 设备离线: deviceId={}, 离线{}s", deviceId, offlineSec);
-                            triggerAlarm(deviceId, "DEVICE_OFFLINE",
+                            patrolAlarms.add("DEVICE_OFFLINE");
+                            triggerAlarm(deviceId, patrolAlarms,
                                     "设备离线" + offlineSec + "秒", floor, node);
                             alarmCount++;
                             continue; // 已离线，跳过其他检查
@@ -130,14 +137,12 @@ public class ScheduledAlarmChecker {
                             deviceId, floor, targetFloor, door);
                     if (levelingAlarm != null) {
                         LOGGER.warn("[巡检] 平层超时: deviceId={}, alarm={}", deviceId, levelingAlarm);
-                        triggerAlarm(deviceId, levelingAlarm,
-                                "电梯困人(平层超时)", floor, node);
+                        patrolAlarms.add(levelingAlarm);
                         alarmCount++;
                     }
 
                     // ---- 检查3: 门未关超时 ----
                     if (!"00".equals(door) && !door.isEmpty()) {
-                        // 更新/读取关门时间戳
                         updateTimestampIfDoorClosed(timestampsKey, door, nowSec);
                         String lastClosedStr = (String) stringRedisTemplate.opsForHash()
                                 .get(timestampsKey, "lastDoorClosedTime");
@@ -146,8 +151,7 @@ public class ScheduledAlarmChecker {
                             long openSec = nowSec - lastClosedSec;
                             if (openSec >= doorOpenThresholdSeconds) {
                                 LOGGER.warn("[巡检] 门未关超时: deviceId={}, 持续{}s", deviceId, openSec);
-                                triggerAlarm(deviceId, "DOOR_OPEN_TOO_LONG",
-                                        "门未关持续" + openSec + "秒", floor, node);
+                                patrolAlarms.add("DOOR_OPEN_TOO_LONG");
                                 alarmCount++;
                             }
                         }
@@ -165,12 +169,14 @@ public class ScheduledAlarmChecker {
                             long idleSec = nowSec - lastMoveSec;
                             if (idleSec >= longIdleThresholdSeconds) {
                                 LOGGER.warn("[巡检] 长时间闲置: deviceId={}, 持续{}s", deviceId, idleSec);
-                                triggerAlarm(deviceId, "LONG_IDLE",
-                                        "电梯闲置" + idleSec + "秒", floor, node);
+                                patrolAlarms.add("LONG_IDLE");
                                 alarmCount++;
                             }
                         }
                     }
+
+                    // 根据本轮巡检结果更新 marker key 和 status（含清除已解除的告警）
+                    triggerAlarm(deviceId, patrolAlarms, "", floor, node);
 
                 } catch (Exception e) {
                     LOGGER.error("[巡检] 设备 {} 巡检异常", deviceId, e);
@@ -204,20 +210,37 @@ public class ScheduledAlarmChecker {
     // ==================== 告警触发 ====================
 
     /**
-     * 触发告警：更新 status JSON 的 Alarm 字段，PUBLISH 到前端。
+     * 触发/更新巡检告警：根据当前触发的告警集合更新 marker key 和 status JSON。
+     * 若集合为空表示所有巡检告警已解除，会清除 marker 和 status 中的巡检告警。
      */
-    private void triggerAlarm(String deviceId, String alarmCode, String desc, String floor, JsonNode node) {
+    private void triggerAlarm(String deviceId, Set<String> patrolAlarms, String desc,
+                               String floor, JsonNode node) {
         try {
-            // 更新 elevator:status HSET 的 Alarm 字段
-            String alarmField = node.has("Alarm") ? node.get("Alarm").asText() : "";
-            String newAlarm;
-            if (alarmField.isEmpty()) {
-                newAlarm = alarmCode;
-            } else if (!alarmField.contains(alarmCode)) {
-                newAlarm = alarmField + "," + alarmCode;
-            } else {
-                newAlarm = alarmField; // 已存在，不重复追加
+            String newAlarm = String.join(",", patrolAlarms);
+
+            // 更新 marker key（核心：RedisHandler.mergeAlarms 读取此 key）
+            stringRedisTemplate.opsForHash().put(HASH_STATUS, deviceId + MARKER_PATROL_ALARM, newAlarm);
+
+            // 保留事件路径的告警（如 LEVELING_TIMEOUT），只替换巡检告警部分
+            // 读取当前 status 中的 Alarm 字段，分离事件告警和巡检告警
+            String currentAlarm = node.has("Alarm") ? node.get("Alarm").asText() : "";
+            Set<String> eventAlarms = new LinkedHashSet<>();
+            if (!currentAlarm.isEmpty()) {
+                for (String s : currentAlarm.split(",")) {
+                    String trimmed = s.trim();
+                    if (trimmed.isEmpty()) continue;
+                    // 巡检告警码列表
+                    if ("DEVICE_OFFLINE".equals(trimmed) || "LEVELING_TIMEOUT".equals(trimmed)
+                            || "DOOR_OPEN_TOO_LONG".equals(trimmed) || "LONG_IDLE".equals(trimmed)) {
+                        continue; // 跳过旧的巡检告警，由 patrolAlarms 替换
+                    }
+                    eventAlarms.add(trimmed);
+                }
             }
+            // 合并事件告警 + 本轮巡检告警
+            Set<String> merged = new LinkedHashSet<>(eventAlarms);
+            merged.addAll(patrolAlarms);
+            String finalAlarm = String.join(",", merged);
 
             // 重建 JSON
             StringBuilder sb = new StringBuilder("{");
@@ -228,7 +251,7 @@ public class ScheduledAlarmChecker {
                 if (!first) sb.append(",");
                 sb.append("\"").append(fn).append("\":\"");
                 if ("Alarm".equals(fn)) {
-                    sb.append(escapeJson(newAlarm));
+                    sb.append(escapeJson(finalAlarm));
                 } else {
                     sb.append(escapeJson(node.get(fn).asText()));
                 }
@@ -241,14 +264,17 @@ public class ScheduledAlarmChecker {
             stringRedisTemplate.opsForHash().put(HASH_STATUS, deviceId, updatedJson);
             stringRedisTemplate.convertAndSend(CHANNEL_STATUS, updatedJson);
 
-            // 推送告警事件
-            String alarmJson = "{\"DeviceId\":\"" + deviceId + "\",\"RuleName\":\"" + alarmCode
-                    + "\",\"Description\":\"" + desc + "\",\"Floor\":\"" + floor + "\"}";
-            stringRedisTemplate.convertAndSend(CHANNEL_ALARM, alarmJson);
+            // 推送告警事件（仅当有新告警触发时）
+            if (!patrolAlarms.isEmpty()) {
+                String alarmJson = "{\"DeviceId\":\"" + deviceId + "\",\"RuleName\":\""
+                        + newAlarm + "\",\"Description\":\"" + desc + "\",\"Floor\":\""
+                        + floor + "\"}";
+                stringRedisTemplate.convertAndSend(CHANNEL_ALARM, alarmJson);
+            }
 
-            LOGGER.info("[巡检] 告警已推送: deviceId={}, alarm={}, desc={}", deviceId, alarmCode, desc);
+            LOGGER.info("[巡检] 告警已更新: deviceId={}, alarms={}", deviceId, finalAlarm);
         } catch (Exception e) {
-            LOGGER.error("[巡检] 告警推送失败: deviceId={}, alarm={}", deviceId, alarmCode, e);
+            LOGGER.error("[巡检] 告警推送失败: deviceId={}, alarms={}", deviceId, patrolAlarms, e);
         }
     }
 

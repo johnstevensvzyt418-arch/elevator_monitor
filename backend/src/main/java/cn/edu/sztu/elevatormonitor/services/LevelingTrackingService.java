@@ -21,7 +21,8 @@ import java.util.Map;
  * <ol>
  *   <li>门状态为"开门到位"(01) 且 当前楼层==目标楼层 → 判定为平层开门状态</li>
  *   <li>开始计时，若该状态持续超过阈值秒数 → 返回告警标识 "LEVELING_TIMEOUT"</li>
- *   <li>门关闭(00) 或 楼层≠目标 → 重置计时器</li>
+ *   <li>告警触发后<b>保持返回告警</b>，直到门关闭或楼层变化才清除</li>
+ *   <li>门关闭(00) 或 楼层≠目标 → 完全重置（含告警状态）</li>
  * </ol>
  *
  * <h3>Redis 数据结构</h3>
@@ -29,6 +30,7 @@ import java.util.Map;
  *   HSET elevator:leveling:{deviceId}
  *     recorded  → "1" / "0"
  *     startSec  → epoch秒数
+ *     fired     → "1" / "0"  （告警是否已触发，用于持久化）
  * </pre>
  *
  * @author bugfix
@@ -40,7 +42,7 @@ public class LevelingTrackingService {
     private static final Logger LOGGER = LoggerFactory.getLogger(LevelingTrackingService.class);
 
     /** 平层超时阈值（秒），可通过配置文件覆盖 */
-    @Value("${alarm.leveling.timeout-seconds:30}")
+    @Value("${alarm.leveling.timeout-seconds:5}")
     private int timeoutSeconds;
 
     /** Redis Hash 键名前缀 */
@@ -76,9 +78,9 @@ public class LevelingTrackingService {
         // 数值化比较楼层，兼容 "01" 与 "1" 等格式差异
         boolean isLeveling = floorEquals(currentFloor, targetFloor);
 
-        // 条件不满足 → 重置状态
+        // 条件不满足 → 完全重置（含告警标记）
         if (!isDoorOpen || !isLeveling) {
-            resetState(hashKey);
+            resetAll(hashKey);
             return null;
         }
 
@@ -86,13 +88,21 @@ public class LevelingTrackingService {
         Map<Object, Object> state = stringRedisTemplate.opsForHash().entries(hashKey);
         String recorded = state != null ? (String) state.get("recorded") : null;
         String startSecStr = state != null ? (String) state.get("startSec") : null;
+        String fired = state != null ? (String) state.get("fired") : null;
 
         long nowSec = Instant.now().getEpochSecond();
+
+        // 告警已触发且条件未解除 → 持续返回告警，保持前端指示灯常亮
+        if ("1".equals(fired)) {
+            LOGGER.debug("[Leveling] 设备 {} 困人告警持续中, floor={}", deviceId, currentFloor);
+            return ALARM_LEVELING_TIMEOUT;
+        }
 
         if (!"1".equals(recorded) || startSecStr == null) {
             // 首次进入平层开门状态 → 开始计时
             stringRedisTemplate.opsForHash().put(hashKey, "recorded", "1");
             stringRedisTemplate.opsForHash().put(hashKey, "startSec", String.valueOf(nowSec));
+            stringRedisTemplate.opsForHash().put(hashKey, "fired", "0");
             LOGGER.info("[Leveling] 设备 {} 进入平层开门状态, 开始计时 (阈值={}s), floor={}",
                     deviceId, timeoutSeconds, currentFloor);
             return null;
@@ -103,7 +113,7 @@ public class LevelingTrackingService {
         try {
             startSec = Long.parseLong(startSecStr);
         } catch (NumberFormatException e) {
-            resetState(hashKey);
+            resetAll(hashKey);
             return null;
         }
 
@@ -111,8 +121,8 @@ public class LevelingTrackingService {
         if (elapsed >= timeoutSeconds) {
             LOGGER.warn("[Leveling] 设备 {} 平层开门超时! 已持续{}s > 阈值{}s, floor={}",
                     deviceId, elapsed, timeoutSeconds, currentFloor);
-            // 超时后重置，避免重复告警（冷却期内由 AlarmRuleEngine 控制）
-            resetState(hashKey);
+            // 标记告警已触发但不重置计时器，后续调用持续返回告警直到条件解除
+            stringRedisTemplate.opsForHash().put(hashKey, "fired", "1");
             return ALARM_LEVELING_TIMEOUT;
         }
 
@@ -134,8 +144,9 @@ public class LevelingTrackingService {
         }
     }
 
-    private void resetState(String hashKey) {
+    private void resetAll(String hashKey) {
         stringRedisTemplate.opsForHash().put(hashKey, "recorded", "0");
         stringRedisTemplate.opsForHash().put(hashKey, "startSec", "0");
+        stringRedisTemplate.opsForHash().put(hashKey, "fired", "0");
     }
 }

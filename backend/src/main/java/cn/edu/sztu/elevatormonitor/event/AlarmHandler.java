@@ -8,6 +8,7 @@ import cn.edu.sztu.elevatormonitor.entity.repository.AlarmEventJpaRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -41,6 +42,9 @@ public class AlarmHandler {
     /** Redis 告警频道 */
     private static final String CHANNEL_ELEVATOR_ALARM = "elevator:alarm";
 
+    /** 规则告警标记 key（HSET 子键），供 RedisHandler 合并，独立于巡检告警 */
+    static final String MARKER_RULE_ALARM = ":rule_alarm";
+
     private final AlarmRuleEngine alarmRuleEngine;
     private final AlarmEventJpaRepository alarmRepo;
     private final StringRedisTemplate stringRedisTemplate;
@@ -54,12 +58,13 @@ public class AlarmHandler {
     }
 
     /**
-     * 监听电梯事件，异步执行告警评估。
+     * 监听电梯事件，同步执行告警评估（@Order(1) 确保在 RedisHandler 之前运行）。
      *
-     * <p>使用 {@code @Async("alarmExecutor")} 确保告警处理不阻塞主流程。</p>
+     * <p>规则评估结果写入 Redis，由 RedisHandler 合并后统一发布，
+     * 消除异步竞态导致的告警灯闪烁问题。DB 持久化仍通过 @Async 异步执行。</p>
      */
     @EventListener
-    @Async("alarmExecutor")
+    @Order(1)
     public void onElevatorEvent(ElevatorEvent event) {
         LOGGER.info("[AlarmHandler] 收到事件: eventId={}, deviceId={}", event.getEventId(), event.getDeviceId());
         try {
@@ -71,14 +76,17 @@ public class AlarmHandler {
             LOGGER.info("[AlarmHandler] 规则评估完成, deviceId={}, 触发数={}",
                     event.getDeviceId(), alarmEvents.size());
 
-            // 3. 持久化 + 推送 + 回写 status HSET
+            // 3. 持久化(异步) + 推送 + 回写告警标记
             for (AlarmEvent alarm : alarmEvents) {
-                persistAlarm(alarm);
+                persistAlarmAsync(alarm);
                 pushAlarm(alarm);
             }
-            // 将触发的告警回写到 elevator:status HSET，让前端告警灯实时联动
+            // 将触发的告警写入标记 key，供 RedisHandler 合并到 status JSON
+            // 无告警时清除标记，确保旧告警不会残留
             if (!alarmEvents.isEmpty()) {
-                updateStatusAlarm(event.getDeviceId(), alarmEvents);
+                updateAlarmMarker(event.getDeviceId(), alarmEvents);
+            } else {
+                clearAlarmMarker(event.getDeviceId());
             }
         } catch (Exception e) {
             LOGGER.error("[AlarmHandler] 处理异常: eventId={}, deviceId={}",
@@ -111,7 +119,11 @@ public class AlarmHandler {
         return msg;
     }
 
-    private void persistAlarm(AlarmEvent alarm) {
+    /**
+     * 异步持久化告警到 MySQL，避免 DB 写入阻塞事件线程。
+     */
+    @Async("alarmExecutor")
+    public void persistAlarmAsync(AlarmEvent alarm) {
         try {
             alarmRepo.save(alarm);
         } catch (Exception e) {
@@ -132,12 +144,11 @@ public class AlarmHandler {
     }
 
     /**
-     * 将告警信息回写到 elevator:status HSET 的 Alarm 字段，
-     * 使前端通过正常的 status WebSocket 消息即可看到告警灯变化。
+     * 将规则引擎告警写入独立的 marker key，供 RedisHandler 合并。
+     * 不再直接修改 status HSET 或重新 PUBLISH，消除竞态闪烁。
      */
-    private void updateStatusAlarm(String deviceId, List<AlarmEvent> alarmEvents) {
+    private void updateAlarmMarker(String deviceId, List<AlarmEvent> alarmEvents) {
         try {
-            // 只统计 FIRED 事件，CLEARED 事件的 ruleName 不应写入 Alarm 字段
             StringBuilder sb = new StringBuilder();
             for (AlarmEvent ae : alarmEvents) {
                 if (!AlarmEvent.TYPE_FIRED.equals(ae.getEventType())) {
@@ -147,20 +158,23 @@ public class AlarmHandler {
                 sb.append(ae.getRuleName());
             }
             String alarmValue = sb.toString();
-            stringRedisTemplate.opsForHash().put("elevator:status", deviceId + ":alarm", alarmValue);
-            // 同时更新主状态中的 Alarm 字段
-            Object raw = stringRedisTemplate.opsForHash().get("elevator:status", deviceId);
-            if (raw != null) {
-                String json = raw.toString();
-                // 简单替换 Alarm 字段值
-                String updated = json.replaceFirst("\"Alarm\":\"[^\"]*\"", "\"Alarm\":\"" + alarmValue + "\"");
-                stringRedisTemplate.opsForHash().put("elevator:status", deviceId, updated);
-                // 重新 PUBLISH 更新后的状态，让前端告警灯实时变化
-                stringRedisTemplate.convertAndSend("elevator:status", updated);
-            }
-            LOGGER.info("[AlarmHandler] status Alarm 已更新: deviceId={}, alarm={}", deviceId, alarmValue);
+            stringRedisTemplate.opsForHash().put("elevator:status", deviceId + MARKER_RULE_ALARM, alarmValue);
+            LOGGER.info("[AlarmHandler] 规则告警标记已写入: deviceId={}, alarm={}", deviceId, alarmValue);
         } catch (Exception e) {
-            LOGGER.error("[AlarmHandler] 更新 status Alarm 失败: deviceId={}", deviceId, e);
+            LOGGER.error("[AlarmHandler] 告警标记写入失败: deviceId={}", deviceId, e);
+        }
+    }
+
+    /**
+     * 清除告警标记 — 当所有规则均未触发时调用，
+     * 确保条件解除后告警立即消失，不会残留在 marker key 中。
+     */
+    private void clearAlarmMarker(String deviceId) {
+        try {
+            stringRedisTemplate.opsForHash().put("elevator:status", deviceId + MARKER_RULE_ALARM, "");
+            LOGGER.debug("[AlarmHandler] 告警标记已清除: deviceId={}", deviceId);
+        } catch (Exception e) {
+            LOGGER.error("[AlarmHandler] 告警标记清除失败: deviceId={}", deviceId, e);
         }
     }
 }

@@ -18,4 +18,4 @@ spring:
 # 开发环境：缩短平层超时阈值便于测试
 alarm:
   leveling:
-    timeout-seconds: 10
+    timeout-seconds: 5

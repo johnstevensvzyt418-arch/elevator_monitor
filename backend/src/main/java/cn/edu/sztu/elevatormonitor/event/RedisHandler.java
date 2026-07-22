@@ -4,6 +4,7 @@ import cn.edu.sztu.elevatormonitor.domain.event.ElevatorEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -58,9 +59,10 @@ public class RedisHandler {
 
     /**
      * 监听电梯事件，同步双写到 Redis（HSET + Pub/Sub）。
-     * 不使用 @Async，确保状态写入在请求线程内完成，避免与 V1 路径数据竞态。
+     * {@code @Order(2)} 确保 AlarmHandler 先完成规则评估，本处理器再合并告警并发布。
      */
     @EventListener
+    @Order(2)
     public void onElevatorEvent(ElevatorEvent event) {
         LOGGER.info("[RedisHandler] 收到事件: eventId={}, deviceId={}", 
                 event.getEventId(), event.getDeviceId());
@@ -100,7 +102,7 @@ public class RedisHandler {
         payload.put("Door",      nvl(e.getDoorStatus()));
         payload.put("Passenger", nvl(e.getPassenger()));
         payload.put("Speed",     formatSpeed(e.getSpeed()));
-        payload.put("Alarm",     nvl(e.getAlarm()));
+        payload.put("Alarm",     mergeAlarms(e.getDeviceId(), nvl(e.getAlarm())));
         payload.put("Runtime",   nvl(e.getRuntime()));
         payload.put("Distance",  formatDistance(e.getDistance()));
         payload.put("Times",     formatTimes(e.getTimes()));
@@ -134,6 +136,48 @@ public class RedisHandler {
     private static String formatTimes(int times) {
         if (times < 0) return "";  // 未填充
         return times + "次";
+    }
+
+    /**
+     * 合并事件路径告警（如 LEVELING_TIMEOUT）与规则引擎告警 + 巡检告警。
+     * 从两个独立的 marker key 读取，互不覆盖。
+     */
+    private String mergeAlarms(String deviceId, String eventAlarm) {
+        try {
+            // 规则告警（AlarmHandler 写入）
+            Object ruleObj = stringRedisTemplate.opsForHash()
+                    .get("elevator:status", deviceId + AlarmHandler.MARKER_RULE_ALARM);
+            String ruleAlarm = (ruleObj != null) ? ruleObj.toString() : "";
+
+            // 巡检告警（ScheduledAlarmChecker 写入）
+            Object patrolObj = stringRedisTemplate.opsForHash()
+                    .get("elevator:status", deviceId + ":patrol_alarm");
+            String patrolAlarm = (patrolObj != null) ? patrolObj.toString() : "";
+
+            java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
+            if (!eventAlarm.isEmpty()) {
+                for (String s : eventAlarm.split(",")) {
+                    String trimmed = s.trim();
+                    if (!trimmed.isEmpty()) merged.add(trimmed);
+                }
+            }
+            if (!ruleAlarm.isEmpty()) {
+                for (String s : ruleAlarm.split(",")) {
+                    String trimmed = s.trim();
+                    if (!trimmed.isEmpty()) merged.add(trimmed);
+                }
+            }
+            if (!patrolAlarm.isEmpty()) {
+                for (String s : patrolAlarm.split(",")) {
+                    String trimmed = s.trim();
+                    if (!trimmed.isEmpty()) merged.add(trimmed);
+                }
+            }
+            return String.join(",", merged);
+        } catch (Exception e) {
+            LOGGER.warn("[RedisHandler] 告警合并失败 deviceId={}: {}", deviceId, e.getMessage());
+            return eventAlarm;
+        }
     }
 
     private static String escapeJson(String s) {
