@@ -117,35 +117,9 @@ public class MNKApplicationService {
             }
         }
 
-        // 3b. 跨请求困人检测（平层+有乘客+门打不开超时）
-        String alarm = frame.getAlarm();
-        if (alarm == null || alarm.isEmpty()) {
-            try {
-                String levelingAlarm = levelingTrackingService.checkLevelingTimeout(
-                        deviceId, currentFloor, targetFloor, doorStatus, frame.getPassenger());
-                if (levelingAlarm != null) {
-                    alarm = levelingAlarm;
-                }
-            } catch (Exception e) {
-                LOGGER.warn("[MNK-App] 困人检测失败(Redis不可用?), deviceId={}", deviceId);
-            }
-        }
-
-        // 3c. 跨请求距离/次数累积（修复 V2 路径 distance/times 永远为空的问题）
-        int distance = frame.getDistance();
-        int times = frame.getTimes();
-        try {
-            DistanceTrackingService.CumulativeResult cumul =
-                    distanceTrackingService.updateAndGet(deviceId, currentFloor);
-            distance = cumul.distance;
-            times = cumul.times;
-        } catch (Exception e) {
-            LOGGER.warn("[MNK-App] 累积追踪失败(Redis不可用?), deviceId={}", deviceId);
-        }
-
-        // 3d. 门状态修正: 协议"00"表示开关门中, 需结合历史状态判定
+        // 3b. 门状态修正: 协议"00"表示开关门中, 需结合历史状态判定
+        //     必须在困人检测之前执行，确保后续使用修正后的门状态
         if (doorStatus == null || doorStatus.isEmpty()) {
-            // 从 Redis 读取上次确定门状态来区分关门中(02)/开门中(03)
             String lastDoorKey = "elevator:door:" + deviceId;
             Object lastDoorObj = null;
             try {
@@ -167,6 +141,33 @@ public class MNKApplicationService {
             } catch (Exception ex) {
                 LOGGER.debug("[MNK-App] 记录门状态失败(Redis不可用?): {}", ex.getMessage());
             }
+        }
+
+        // 3c. 跨请求困人检测（平层+有乘客+门打不开超时）
+        //     使用修正后的 doorStatus，而非原始协议值
+        String alarm = frame.getAlarm();
+        if (alarm == null || alarm.isEmpty()) {
+            try {
+                String levelingAlarm = levelingTrackingService.checkLevelingTimeout(
+                        deviceId, currentFloor, targetFloor, doorStatus, frame.getPassenger());
+                if (levelingAlarm != null) {
+                    alarm = levelingAlarm;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("[MNK-App] 困人检测失败(Redis不可用?), deviceId={}", deviceId);
+            }
+        }
+
+        // 3d. 跨请求距离/次数累积（修复 V2 路径 distance/times 永远为空的问题）
+        int distance = frame.getDistance();
+        int times = frame.getTimes();
+        try {
+            DistanceTrackingService.CumulativeResult cumul =
+                    distanceTrackingService.updateAndGet(deviceId, currentFloor);
+            distance = cumul.distance;
+            times = cumul.times;
+        } catch (Exception e) {
+            LOGGER.warn("[MNK-App] 累积追踪失败(Redis不可用?), deviceId={}", deviceId);
         }
 
         // ---- 4. 重建 MNKFrame（带填充后的值） ----
