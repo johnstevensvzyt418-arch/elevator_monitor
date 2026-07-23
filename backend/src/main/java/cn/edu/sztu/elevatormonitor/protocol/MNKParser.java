@@ -331,13 +331,17 @@ public class MNKParser implements ProtocolParser<MNKFrame> {
 
     /**
      * 推理乘客状态。
+     * 开门到位 → 乘客已离开（无论是否有内招）
+     * 门未开 + 有内招 → 有乘客等待
      */
     private String inferPassenger(String targetFloor, String doorStatus) {
-        if (!"无".equals(targetFloor)) {
-            return "01"; // 有内召 → 有乘客
-        }
+        // 开门到位 → 乘客已离开
         if ("01".equals(doorStatus)) {
-            return "00"; // 开门到位且无内召 → 乘客已离开
+            return "00";
+        }
+        // 门未开 → 有内招表示有乘客
+        if (!"无".equals(targetFloor)) {
+            return "01";
         }
         return "00";
     }

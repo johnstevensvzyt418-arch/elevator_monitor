@@ -157,12 +157,13 @@ public class ElevatorMessage {
             setSpeed(0.0);
         }
     }
-    // 乘客
+    // 乘客：开门到位 → 乘客已离开；门未开 + 有内招 → 有乘客
     public void setPassenger() {
-        if (!"无".equals(targetFloor)) {
-            setPassenger("01"); // 有乘客
-        }
-        if ("无".equals(targetFloor) && "01".equals(getDoorStatus())) {
+        if ("01".equals(getDoorStatus())) {
+            setPassenger("00"); // 开门到位 → 乘客已离开
+        } else if (!"无".equals(targetFloor)) {
+            setPassenger("01"); // 门未开 + 有内招 → 有乘客
+        } else {
             setPassenger("00");
         }
     }
