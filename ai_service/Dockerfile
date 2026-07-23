@@ -15,11 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 安装 Python 依赖
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --no-deps --no-index --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu/ torch
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
 # 复制所有模型文件
 COPY config.toml .
 COPY infer_server.py .
+COPY protocol_baseline.py .
 COPY model/ ./model/
 COPY trained_models/ ./trained_models/
 
