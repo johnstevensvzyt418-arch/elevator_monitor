@@ -114,6 +114,7 @@ public class ScheduledAlarmChecker {
                     String floor = node.has("Floor") ? node.get("Floor").asText() : "";
                     String targetFloor = node.has("ToFloor") ? node.get("ToFloor").asText() : "";
                     String direction = node.has("Direction") ? node.get("Direction").asText() : "";
+                    String passenger = node.has("Passenger") ? node.get("Passenger").asText() : "";
                     String timestampsKey = HASH_TIMESTAMPS_PREFIX + deviceId;
 
                     // ---- 检查1: 设备离线 ----
@@ -132,11 +133,11 @@ public class ScheduledAlarmChecker {
                         }
                     }
 
-                    // ---- 检查2: 平层超时（困人） ----
+                    // ---- 检查2: 困人检测（平层+有乘客+门打不开超时） ----
                     String levelingAlarm = levelingTrackingService.checkLevelingTimeout(
-                            deviceId, floor, targetFloor, door);
+                            deviceId, floor, targetFloor, door, passenger);
                     if (levelingAlarm != null) {
-                        LOGGER.warn("[巡检] 平层超时: deviceId={}, alarm={}", deviceId, levelingAlarm);
+                        LOGGER.warn("[巡检] 困人告警: deviceId={}, alarm={}", deviceId, levelingAlarm);
                         patrolAlarms.add(levelingAlarm);
                         alarmCount++;
                     }

@@ -10,6 +10,7 @@ import cn.edu.sztu.elevatormonitor.services.SpeedTrackingService;
 import cn.edu.sztu.elevatormonitor.services.DistanceTrackingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 /**
@@ -26,7 +27,6 @@ import org.springframework.stereotype.Service;
  * <h3>禁止事项</h3>
  * <ul>
  *   <li>❌ 不允许包含任何协议解析逻辑</li>
- *   <li>❌ 不允许直接操作 MySQL / Redis</li>
  *   <li>❌ 不允许包含业务规则判断</li>
  * </ul>
  *
@@ -43,17 +43,20 @@ public class MNKApplicationService {
     private final SpeedTrackingService speedTrackingService;
     private final LevelingTrackingService levelingTrackingService;
     private final DistanceTrackingService distanceTrackingService;
+    private final StringRedisTemplate stringRedisTemplate;
 
     public MNKApplicationService(MNKParser parser,
                                  EventPublisher eventPublisher,
                                  SpeedTrackingService speedTrackingService,
                                  LevelingTrackingService levelingTrackingService,
-                                 DistanceTrackingService distanceTrackingService) {
+                                 DistanceTrackingService distanceTrackingService,
+                                 StringRedisTemplate stringRedisTemplate) {
         this.parser = parser;
         this.eventPublisher = eventPublisher;
         this.speedTrackingService = speedTrackingService;
         this.levelingTrackingService = levelingTrackingService;
         this.distanceTrackingService = distanceTrackingService;
+        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     /**
@@ -114,17 +117,17 @@ public class MNKApplicationService {
             }
         }
 
-        // 3b. 跨请求平层超时检测
+        // 3b. 跨请求困人检测（平层+有乘客+门打不开超时）
         String alarm = frame.getAlarm();
         if (alarm == null || alarm.isEmpty()) {
             try {
                 String levelingAlarm = levelingTrackingService.checkLevelingTimeout(
-                        deviceId, currentFloor, targetFloor, doorStatus);
+                        deviceId, currentFloor, targetFloor, doorStatus, frame.getPassenger());
                 if (levelingAlarm != null) {
                     alarm = levelingAlarm;
                 }
             } catch (Exception e) {
-                LOGGER.warn("[MNK-App] 平层检测失败(Redis不可用?), deviceId={}", deviceId);
+                LOGGER.warn("[MNK-App] 困人检测失败(Redis不可用?), deviceId={}", deviceId);
             }
         }
 
@@ -142,8 +145,28 @@ public class MNKApplicationService {
 
         // 3d. 门状态修正: 协议"00"表示开关门中, 需结合历史状态判定
         if (doorStatus == null || doorStatus.isEmpty()) {
-            // 从 Redis 读取上次门状态来区分关门中(02)/开门中(03)
-            doorStatus = "02"; // 默认关门中，后续可通过有状态服务优化
+            // 从 Redis 读取上次确定门状态来区分关门中(02)/开门中(03)
+            String lastDoorKey = "elevator:door:" + deviceId;
+            Object lastDoorObj = null;
+            try {
+                lastDoorObj = stringRedisTemplate.opsForValue().get(lastDoorKey);
+            } catch (Exception ex) {
+                LOGGER.debug("[MNK-App] 读取上次门状态失败(Redis不可用?): {}", ex.getMessage());
+            }
+            String lastDoor = (lastDoorObj != null) ? lastDoorObj.toString() : "";
+            // 上次关门 → 现在开门中; 上次开门 → 现在关门中; 未知 → 默认关门中
+            if ("00".equals(lastDoor)) {
+                doorStatus = "03"; // 开门中
+            } else {
+                doorStatus = "02"; // 关门中（含首次未知）
+            }
+        } else {
+            // 确定的门状态(00关门到位/01开门到位) → 记录到 Redis 供后续帧参考
+            try {
+                stringRedisTemplate.opsForValue().set("elevator:door:" + deviceId, doorStatus);
+            } catch (Exception ex) {
+                LOGGER.debug("[MNK-App] 记录门状态失败(Redis不可用?): {}", ex.getMessage());
+            }
         }
 
         // ---- 4. 重建 MNKFrame（带填充后的值） ----

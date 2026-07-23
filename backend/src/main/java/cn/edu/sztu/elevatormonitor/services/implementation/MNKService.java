@@ -180,15 +180,16 @@ public class MNKService implements ElevatorService {
             //报警（原有请求内逻辑，保留兼容）
             elevatorMessage.setMalfunction(GetTimeInSeconds.getSeconds(time));
 
-            // 基于 Redis 的有状态平层超时检测（跨请求累积，修复 ALARM_FIELD 无法触发）
+            // 基于 Redis 的有状态困人检测（跨请求累积，平层+有乘客+门打不开超时）
             String levelingAlarm = levelingTrackingService.checkLevelingTimeout(
                     elevatorMessage.getDeviceId(),
                     elevatorMessage.getCurrentFloor(),
                     elevatorMessage.getTargetFloor(),
-                    elevatorMessage.getDoorStatus());
+                    elevatorMessage.getDoorStatus(),
+                    elevatorMessage.getPassenger());
             if (levelingAlarm != null) {
                 elevatorMessage.setAlarm(levelingAlarm);
-                LOGGER.warn("[MNK] 平层超时告警: deviceId={}, alarm={}",
+                LOGGER.warn("[MNK] 困人告警: deviceId={}, alarm={}",
                         elevatorMessage.getDeviceId(), levelingAlarm);
             }
 
