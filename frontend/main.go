@@ -18,6 +18,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const (
+	// WebSocket 心跳间隔
+	wsPingInterval = 30 * time.Second
+	// WebSocket 读超时（Pong 等待时间 + 余量）
+	wsReadDeadline = 60 * time.Second
+	// WebSocket 写超时
+	wsWriteTimeout = 10 * time.Second
+)
+
 type Cache struct {
 	mutex   sync.RWMutex
 	clients map[string]*websocket.Conn
@@ -42,27 +51,41 @@ func (p *Cache) Init() {
 	p.clients = make(map[string]*websocket.Conn, 10)
 }
 
-// 向已连接的服务页面推送消息
+// 向已连接的服务页面推送消息，写失败时自动清理死连接。
 func (p *Cache) SendMessage(data string) (int, int) {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 
 	textData := []byte(data)
-
 	var succ int
 	var fail int
+	var deadKeys []string
 
-	for _, conn := range p.clients {
-		if conn != nil {
-			if err := conn.WriteMessage(websocket.TextMessage, textData); err != nil {
-				fail++
-			} else {
-				succ++
-			}
+	for key, conn := range p.clients {
+		if conn == nil {
+			deadKeys = append(deadKeys, key)
+			continue
+		}
+		conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+		if err := conn.WriteMessage(websocket.TextMessage, textData); err != nil {
+			fail++
+			deadKeys = append(deadKeys, key)
+			conn.Close()
+		} else {
+			succ++
 		}
 	}
 
-	log.Printf("send message to ws client, succ: %v, fail: %v", succ, fail)
+	// 清理写失败的死连接
+	for _, key := range deadKeys {
+		delete(p.clients, key)
+	}
+
+	if fail > 0 {
+		log.Printf("send message to ws client, succ: %v, fail: %v (已清理 %d 个死连接)", succ, fail, len(deadKeys))
+	} else {
+		log.Printf("send message to ws client, succ: %v", succ)
+	}
 
 	return succ, fail
 }
@@ -107,13 +130,47 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
 		cache.AddClient(conn)
 	}
 
+	// 设置初始读超时
+	conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+
+	// Pong 处理器：收到浏览器 Pong 后重置读超时
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+		return nil
+	})
+
+	// 启动心跳协程：每 wsPingInterval 发送 Ping，失败则关闭连接
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(wsPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					log.Printf("[WS] Ping 失败，关闭连接: %v", err)
+					conn.Close()
+					return
+				}
+			case <-pingDone:
+				return
+			}
+		}
+	}()
+
+	// 读取循环：阻塞读，超时或错误则退出
 	for {
-		t, msg, err := conn.ReadMessage()
+		_, _, err := conn.ReadMessage()
 		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				log.Printf("[WS] 连接异常关闭: %v", err)
+			}
 			break
 		}
-		conn.WriteMessage(t, msg)
 	}
+
+	close(pingDone)
 
 	if cache != nil {
 		cache.DeleteClient(conn)
