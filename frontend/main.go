@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -180,23 +181,59 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
 var cache *Cache
 var redisQueryClient *redis.Client
 
+// newRedisClientForPubSub 创建专用于 Pub/Sub 长连接的 Redis 客户端。
+// 关键配置：ReadTimeout=0 禁用读超时（否则空闲 3s 后 PubSub 会断开），
+// 并启用 TCP Keepalive 防止中间代理断开空闲连接。
+func newRedisClientForPubSub(redisAddr, redisPassword string) *redis.Client {
+	return redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       0,
+		// PubSub 长连接必须禁用读超时，否则空闲时 go-redis 会主动断开
+		ReadTimeout:  -1,
+		WriteTimeout: -1,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var d net.Dialer
+			d.Timeout = 10 * time.Second
+			d.KeepAlive = 30 * time.Second // TCP keepalive，防止中间代理断开空闲连接
+			// 直接 dial TCP，跳过 TLS
+			conn, err := d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			// 对于非 TLS 连接（标准 Redis），不需要 TLS
+			// 如果是 TLS Redis（rediss://），需要在这里做 TLS 握手
+			return conn, nil
+		},
+		// 连接池设为 1（PubSub 独占连接）
+		PoolSize: 1,
+		MinIdleConns: 1,
+	})
+}
+
 // redisSubscriber 订阅 Redis elevator:status 频道，收到消息后通过 WebSocket 广播。
 // 支持自动重连：连接断开后每 3 秒重试。
 func redisSubscriber(redisAddr, redisPassword string) {
 	ctx := context.Background()
 
 	for {
-		rdb := redis.NewClient(&redis.Options{
-			Addr:     redisAddr,
-			Password: redisPassword,
-			DB:       0,
-		})
+		rdb := newRedisClientForPubSub(redisAddr, redisPassword)
 
 		// 同时订阅设备状态、AI 推理结果和规则告警频道。
 		pubsub := rdb.Subscribe(ctx, "elevator:status", "elevator:ai_result", "elevator:alarm")
+
+		// 等待订阅确认，处理连接失败
+		if _, err := pubsub.Receive(ctx); err != nil {
+			log.Printf("[Redis] 订阅失败: %v，3秒后重连...", err)
+			pubsub.Close()
+			rdb.Close()
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
 		log.Printf("[Redis] 已连接到 %s，订阅频道 elevator:status + elevator:ai_result + elevator:alarm", redisAddr)
 
-		// 阻塞读取消息
+		// 阻塞读取消息（Channel 默认缓冲 100，电梯上报频率约 1-2条/秒，足够）
 		ch := pubsub.Channel()
 		for msg := range ch {
 			log.Printf("[Redis] 收到 %s: %s", msg.Channel, msg.Payload)
@@ -284,9 +321,14 @@ func main() {
 	redisPassword := os.Getenv("REDIS_PASSWORD")
 	redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
 	redisQueryClient = redis.NewClient(&redis.Options{
-		Addr:     redisAddr,
-		Password: redisPassword,
-		DB:       0,
+		Addr:         redisAddr,
+		Password:     redisPassword,
+		DB:           0,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		DialTimeout:  5 * time.Second,
+		PoolSize:     5,
+		MinIdleConns: 1,
 	})
 
 	go redisSubscriber(redisAddr, redisPassword)

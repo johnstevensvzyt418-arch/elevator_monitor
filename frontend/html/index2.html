@@ -232,7 +232,12 @@
                 scheduleReconnect();
             };
 
-            ws.onerror = function() {};
+            ws.onerror = function() {
+                // 出错时主动关闭连接，确保 onclose 触发重连
+                if (ws) {
+                    try { ws.close(); } catch(e) {}
+                }
+            };
         }
 
         function scheduleReconnect() {
