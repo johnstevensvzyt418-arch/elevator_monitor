@@ -5,8 +5,8 @@ FROM python:3.11-alpine
 
 WORKDIR /app
 
-# 安装依赖
-RUN pip install --no-cache-dir paho-mqtt==1.6.1
+# 安装依赖（paho-mqtt >=2.0 支持 MQTTv5 + CallbackAPIVersion.VERSION2）
+RUN pip install --no-cache-dir "paho-mqtt>=2.0"
 
 # 复制桥接脚本
 COPY mqtt_bridge.py .
