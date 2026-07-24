@@ -206,7 +206,7 @@ func newRedisClientForPubSub(redisAddr, redisPassword string) *redis.Client {
 			return conn, nil
 		},
 		// 连接池设为 1（PubSub 独占连接）
-		PoolSize: 1,
+		PoolSize:     1,
 		MinIdleConns: 1,
 	})
 }
