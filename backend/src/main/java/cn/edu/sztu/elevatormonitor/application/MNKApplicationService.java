@@ -189,6 +189,15 @@ public class MNKApplicationService {
                 .rawData(rawData)
                 .build();
 
+        // ---- 4.5 直接更新最后消息时间戳（不依赖事件总线，确保离线检测可靠） ----
+        try {
+            stringRedisTemplate.opsForHash().put(
+                    "elevator:timestamps:" + deviceId, "lastMessageTime",
+                    String.valueOf(java.time.Instant.now().getEpochSecond()));
+        } catch (Exception tsEx) {
+            LOGGER.warn("[MNK-App] 时间戳更新失败(Redis不可用?), deviceId={}", deviceId);
+        }
+
         // ---- 5. 转换为领域事件 ----
         ElevatorEvent event = ElevatorEvent.from(enrichedFrame);
 
