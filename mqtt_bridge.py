@@ -4,11 +4,11 @@
 # 订阅远程 EMQX Broker 的 /Elevator 主题，转发到后端 HTTP API
 #
 # 环境变量:
-#   MQTT_BROKER_URL    - MQTT Broker 地址 (默认: tcp.sealosbja.site)
-#   MQTT_BROKER_PORT   - MQTT Broker 端口 (默认: 35205)
-#   MQTT_USERNAME      - MQTT 用户名 (默认: admin)
-#   MQTT_PASSWORD      - MQTT 密码 (默认: SZTUbdi@1005)
-#   BACKEND_URL        - 后端 HTTP API (默认: http://localhost:10008/api/v2/mnk)
+#   MQTT_BROKER_URL    - MQTT Broker 地址
+#   MQTT_BROKER_PORT   - MQTT Broker 端口
+#   MQTT_USERNAME      - MQTT 用户名
+#   MQTT_PASSWORD      - MQTT 密码（必填）
+#   BACKEND_URL        - 后端 HTTP API
 #
 # 架构说明:
 #   MQTT 网络线程 (loop_start) → 消息队列 → HTTP 工作线程
@@ -33,10 +33,14 @@ except ImportError:
 # ---- 从环境变量读取配置 ----
 BROKER_URL = os.getenv("MQTT_BROKER_URL", "tcp.sealosbja.site")
 BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "35205"))
-MQTT_USERNAME = os.getenv("MQTT_USERNAME", "admin")
-MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "SZTUbdi@1005")
+MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:10008/api/v2/mnk")
 TOPIC = "/Elevator"
+
+# 密码为空时给出明确警告（但不阻止启动，方便本地无认证调试）
+if not MQTT_PASSWORD:
+    print("[Bridge] ⚠️ 未设置 MQTT_PASSWORD 环境变量，将以无密码模式连接")
 
 # 消息队列（MQTT 线程 → HTTP 工作线程）
 # 单 worker 线程保证 FIFO 顺序，避免后端收到乱序报文导致前端跳帧。

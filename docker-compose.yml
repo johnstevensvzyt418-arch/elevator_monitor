@@ -14,7 +14,7 @@ services:
     container_name: elevator-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-SZTUbdi@1005}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: elevator_monitor
     ports:
       - "${MYSQL_PORT:-3307}:3306"
@@ -26,7 +26,7 @@ services:
       - --collation-server=utf8mb4_unicode_ci
       - --default-authentication-plugin=mysql_native_password
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-SZTUbdi@1005}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -74,7 +74,7 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
       MYSQL_USER: root
-      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-SZTUbdi@1005}
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
       # Redis 连接
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: "6379"
@@ -84,14 +84,14 @@ services:
       # MQTT Broker（远程）
       MQTT_BROKER_URL: ${MQTT_BROKER_URL:-tcp://tcp.sealosbja.site:35205}
       MQTT_CLIENT_ID: elevator-monitor-server
-      MQTT_USERNAME: ${MQTT_USERNAME:-admin}
-      MQTT_PASSWORD: ${MQTT_PASSWORD:-SZTUbdi@1005}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
       # 云平台接入
       PLATFORM_WEB_URL: ${PLATFORM_WEB_URL:-https://aqwtmupbegka.sealosbja.site}
       PLATFORM_API_BASE: ${PLATFORM_API_BASE:-https://bbjxeudameoz.sealosbja.site/api}
       PLATFORM_WS_URL: ${PLATFORM_WS_URL:-wss://bbjxeudameoz.sealosbja.site/ws}
-      PLATFORM_USERNAME: ${PLATFORM_USERNAME:-admin}
-      PLATFORM_PASSWORD: ${PLATFORM_PASSWORD:-SZTUbdi@1005}
+      PLATFORM_USERNAME: ${PLATFORM_USERNAME:-}
+      PLATFORM_PASSWORD: ${PLATFORM_PASSWORD:-}
       # AI 异常检测服务
       AI_SERVICE_URL: ${AI_SERVICE_URL:-http://ai_service:8000}
     depends_on:
@@ -160,6 +160,7 @@ services:
 
   # ==========================================================
   # 6. MQTT 桥接器 (Python — 可选，仅当后端不直接连接 MQTT 时启用)
+  #     启用方式: docker compose --profile bridge up -d
   # ==========================================================
   mqtt-bridge:
     build:
@@ -171,14 +172,13 @@ services:
       BACKEND_URL: http://backend:10008/api/v2/mnk
       MQTT_BROKER_URL: ${MQTT_BROKER_URL:-tcp.sealosbja.site}
       MQTT_BROKER_PORT: ${MQTT_BROKER_PORT:-35205}
-      MQTT_USERNAME: ${MQTT_USERNAME:-admin}
-      MQTT_PASSWORD: ${MQTT_PASSWORD:-SZTUbdi@1005}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
     depends_on:
       backend:
         condition: service_healthy
-    # 注意：如果后端已通过 Spring Integration 直连 MQTT，可以注释掉此服务
-    # profiles:
-    #   - bridge
+    profiles:
+      - bridge
     networks:
       - elevator-net
 

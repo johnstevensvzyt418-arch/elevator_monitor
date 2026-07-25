@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,9 +115,19 @@ func (p *Cache) DeleteClient(conn *websocket.Conn) {
 var wsupgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// 解决跨域问题
+	// 仅允许同源请求（生产环境），本地开发可通过 localhost 访问
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // 无 Origin 头的请求（如 curl、非浏览器环境）
+		}
+		host := r.Host
+		// 允许 localhost 开发访问
+		if strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") {
+			return strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1")
+		}
+		// 生产环境仅允许同源
+		return strings.Contains(origin, host)
 	},
 }
 

@@ -13,7 +13,7 @@ spring:
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/elevator_monitor?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
     username: ${MYSQL_USER:root}
-    password: ${MYSQL_PASSWORD:SZTUbdi@1005}
+    password: ${MYSQL_PASSWORD:}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -49,8 +49,8 @@ mqtt:
   topic: /Elevator
   command-up-topic: /elevator/+/command/up
   qos: 1
-  username: ${MQTT_USERNAME:admin}
-  password: ${MQTT_PASSWORD:SZTUbdi@1005}
+  username: ${MQTT_USERNAME:}
+  password: ${MQTT_PASSWORD:}
 
 # 云平台接入
 platform:
@@ -58,5 +58,5 @@ platform:
   api-base: ${PLATFORM_API_BASE:https://bbjxeudameoz.sealosbja.site/api}
   ws-url: ${PLATFORM_WS_URL:wss://bbjxeudameoz.sealosbja.site/ws}
   auth:
-    username: ${PLATFORM_USERNAME:admin}
-    password: ${PLATFORM_PASSWORD:SZTUbdi@1005}
+    username: ${PLATFORM_USERNAME:}
+    password: ${PLATFORM_PASSWORD:}

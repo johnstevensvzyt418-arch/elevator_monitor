@@ -55,10 +55,10 @@ public class MqttConfig {
     @Value("${mqtt.command-up-topic:/elevator/+/command/up}")
     private String commandUpTopic;
 
-    @Value("${mqtt.username:admin}")
+    @Value("${mqtt.username:}")
     private String username;
 
-    @Value("${mqtt.password:SZTUbdi@1005}")
+    @Value("${mqtt.password:}")
     private String password;
 
     @Value("${mqtt.qos:1}")
