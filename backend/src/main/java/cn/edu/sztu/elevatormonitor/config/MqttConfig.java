@@ -15,6 +15,9 @@ import org.springframework.integration.mqtt.inbound.MqttPahoMessageDrivenChannel
 import org.springframework.integration.mqtt.support.DefaultPahoMessageConverter;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessageHandler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * MQTT 配置 — 连接远程 EMQX Broker，接收嵌入式设备通过 MQTT 协议上报的电梯数据。
@@ -88,7 +91,27 @@ public class MqttConfig {
     }
 
     /**
-     * MQTT 入站通道。
+     * MQTT 消息处理线程池 — 供 @Async 注解使用，将消息处理从 MQTT 接收线程剥离。
+     */
+    @Bean("mqttExecutor")
+    public ThreadPoolTaskExecutor mqttExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(200);
+        executor.setKeepAliveSeconds(60);
+        executor.setThreadNamePrefix("mqtt-msg-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        executor.initialize();
+        LOGGER.info("[MQTT] mqttExecutor 初始化: core=2, max=4, queue=200");
+        return executor;
+    }
+
+    /**
+     * MQTT 入站通道 — 使用 DirectChannel。
+     * MQTT 消息通过 @Async("mqttExecutor") 在 MqttMessageReceiver 中异步处理。
      */
     @Bean
     public MessageChannel mqttInputChannel() {

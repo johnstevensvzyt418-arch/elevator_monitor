@@ -54,15 +54,15 @@ func (p *Cache) Init() {
 }
 
 // 向已连接的服务页面推送消息，写失败时自动清理死连接。
+// 使用读锁进行迭代（不阻塞其他消息推送），仅在清理死连接时短暂持有写锁。
 func (p *Cache) SendMessage(data string) (int, int) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
 	textData := []byte(data)
 	var succ int
 	var fail int
 	var deadKeys []string
 
+	// 读锁：允许多个 SendMessage 并发执行
+	p.mutex.RLock()
 	for key, conn := range p.clients {
 		if conn == nil {
 			deadKeys = append(deadKeys, key)
@@ -77,10 +77,15 @@ func (p *Cache) SendMessage(data string) (int, int) {
 			succ++
 		}
 	}
+	p.mutex.RUnlock()
 
-	// 清理写失败的死连接
-	for _, key := range deadKeys {
-		delete(p.clients, key)
+	// 清理死连接：短暂持有写锁
+	if len(deadKeys) > 0 {
+		p.mutex.Lock()
+		for _, key := range deadKeys {
+			delete(p.clients, key)
+		}
+		p.mutex.Unlock()
 	}
 
 	if fail > 0 {

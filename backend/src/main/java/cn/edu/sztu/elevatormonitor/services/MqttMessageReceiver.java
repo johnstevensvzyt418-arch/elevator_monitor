@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.integration.annotation.ServiceActivator;
 import org.springframework.messaging.Message;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -61,6 +62,7 @@ public class MqttMessageReceiver {
      *
      * @param message MQTT 消息 (payload = MNK HEX 字符串)
      */
+    @Async("mqttExecutor")
     @ServiceActivator(inputChannel = "mqttInputChannel")
     public void handleMqttMessage(Message<?> message) {
         try {
