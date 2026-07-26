@@ -154,6 +154,11 @@ public class RedisHandler {
                     .get("elevator:status", deviceId + ":patrol_alarm");
             String patrolAlarm = (patrolObj != null) ? patrolObj.toString() : "";
 
+            // API 调试端点告警（Go 前端 /api 写入）
+            Object apiObj = stringRedisTemplate.opsForHash()
+                    .get("elevator:status", deviceId + ":api_alarm");
+            String apiAlarm = (apiObj != null) ? apiObj.toString() : "";
+
             java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
             if (!eventAlarm.isEmpty()) {
                 for (String s : eventAlarm.split(",")) {
@@ -169,6 +174,12 @@ public class RedisHandler {
             }
             if (!patrolAlarm.isEmpty()) {
                 for (String s : patrolAlarm.split(",")) {
+                    String trimmed = s.trim();
+                    if (!trimmed.isEmpty()) merged.add(trimmed);
+                }
+            }
+            if (!apiAlarm.isEmpty()) {
+                for (String s : apiAlarm.split(",")) {
                     String trimmed = s.trim();
                     if (!trimmed.isEmpty()) merged.add(trimmed);
                 }

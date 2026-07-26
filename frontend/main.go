@@ -21,10 +21,10 @@ import (
 )
 
 const (
-	// WebSocket 心跳间隔
-	wsPingInterval = 30 * time.Second
+	// WebSocket 心跳间隔（缩短以保持连接活跃）
+	wsPingInterval = 15 * time.Second
 	// WebSocket 读超时（Pong 等待时间 + 余量）
-	wsReadDeadline = 60 * time.Second
+	wsReadDeadline = 45 * time.Second
 	// WebSocket 写超时
 	wsWriteTimeout = 10 * time.Second
 )
@@ -139,12 +139,14 @@ var wsupgrader = websocket.Upgrader{
 func wshandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := wsupgrader.Upgrade(w, r, nil)
 	if err != nil {
-		fmt.Printf("Failed to set websocket upgrade: %+v\n", err)
+		log.Printf("[WS] 升级失败: %v", err)
 		return
 	}
-
+	clientAddr := r.RemoteAddr
+	log.Printf("[WS] 新客户端连接: %s", clientAddr)
 	if cache != nil {
 		cache.AddClient(conn)
+		log.Printf("[WS] 当前在线客户端数: %d", len(cache.clients))
 	}
 
 	// 设置初始读超时
@@ -181,16 +183,21 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
 		_, _, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("[WS] 连接异常关闭: %v", err)
+				log.Printf("[WS] 连接异常关闭: %v (客户端: %s)", err, clientAddr)
+			} else {
+				log.Printf("[WS] 连接关闭: %v (客户端: %s)", err, clientAddr)
 			}
 			break
 		}
+		// 收到客户端消息时重置读超时
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
 	}
 
 	close(pingDone)
 
 	if cache != nil {
 		cache.DeleteClient(conn)
+		log.Printf("[WS] 客户端断开: %s, 剩余在线: %d", clientAddr, len(cache.clients))
 	}
 }
 
@@ -521,6 +528,19 @@ func main() {
 		}
 
 		msg := string(msgbyte)
+
+		// 将告警写入独立的 marker key，供后端 RedisHandler.mergeAlarms() 合并
+		// 避免直接覆盖 elevator:status 导致被后续 MQTT 正常数据覆盖
+		if redisQueryClient != nil && alarm != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			markerKey := device + ":api_alarm"
+			if err := redisQueryClient.HSet(ctx, "elevator:status", markerKey, alarm).Err(); err != nil {
+				log.Printf("[HTTP] Redis marker HSET 失败: device=%s, err=%v", device, err)
+			} else {
+				log.Printf("[HTTP] Redis marker HSET 成功: device=%s, alarm=%s", device, alarm)
+			}
+		}
 
 		if cache != nil {
 			succ, fail := cache.SendMessage(msg)
