@@ -39,14 +39,14 @@ public class EventConfig {
 
     /**
      * 事件广播线程池。
-     * 核心线程 2，最大 8，队列 200，拒绝策略 CallerRunsPolicy（背压不丢事件）。
+     * 核心线程 2，最大 8，队列 2000，拒绝策略 CallerRunsPolicy（背压不丢事件）。
      */
     @Bean("eventExecutor")
     public ThreadPoolTaskExecutor eventExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(8);
-        executor.setQueueCapacity(200);
+        executor.setQueueCapacity(2000);
         executor.setKeepAliveSeconds(60);
         executor.setThreadNamePrefix("event-bus-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
@@ -54,7 +54,7 @@ public class EventConfig {
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();
 
-        LOGGER.info("[EventConfig] eventExecutor 初始化: core=2, max=8, queue=200");
+        LOGGER.info("[EventConfig] eventExecutor 初始化: core=2, max=8, queue=2000");
         return executor;
     }
 

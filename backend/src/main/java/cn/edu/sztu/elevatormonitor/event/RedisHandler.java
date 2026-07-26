@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
@@ -61,6 +62,7 @@ public class RedisHandler {
      * 监听电梯事件，同步双写到 Redis（HSET + Pub/Sub）。
      * {@code @Order(2)} 确保 AlarmHandler 先完成规则评估，本处理器再合并告警并发布。
      */
+    @Async
     @EventListener
     @Order(2)
     public void onElevatorEvent(ElevatorEvent event) {
@@ -144,20 +146,27 @@ public class RedisHandler {
      */
     private String mergeAlarms(String deviceId, String eventAlarm) {
         try {
-            // 规则告警（AlarmHandler 写入）
-            Object ruleObj = stringRedisTemplate.opsForHash()
-                    .get("elevator:status", deviceId + AlarmHandler.MARKER_RULE_ALARM);
-            String ruleAlarm = (ruleObj != null) ? ruleObj.toString() : "";
-
-            // 巡检告警（ScheduledAlarmChecker 写入）
-            Object patrolObj = stringRedisTemplate.opsForHash()
-                    .get("elevator:status", deviceId + ":patrol_alarm");
-            String patrolAlarm = (patrolObj != null) ? patrolObj.toString() : "";
-
-            // API 调试端点告警（Go 前端 /api 写入）
-            Object apiObj = stringRedisTemplate.opsForHash()
-                    .get("elevator:status", deviceId + ":api_alarm");
-            String apiAlarm = (apiObj != null) ? apiObj.toString() : "";
+            // 使用 pipeline 批量查询，减少网络往返（3次→1次）
+            String ruleKey = deviceId + AlarmHandler.MARKER_RULE_ALARM;
+            String patrolKey = deviceId + ":patrol_alarm";
+            String apiKey = deviceId + ":api_alarm";
+            java.util.List<Object> results = stringRedisTemplate.executePipelined(
+                    new org.springframework.data.redis.core.SessionCallback<Object>() {
+                        @Override
+                        @SuppressWarnings("unchecked")
+                        public <K, V> Object execute(org.springframework.data.redis.core.RedisOperations<K, V> operations) {
+                            operations.opsForHash().get((K) HASH_KEY_ELEVATOR_STATUS, (K) ruleKey);
+                            operations.opsForHash().get((K) HASH_KEY_ELEVATOR_STATUS, (K) patrolKey);
+                            operations.opsForHash().get((K) HASH_KEY_ELEVATOR_STATUS, (K) apiKey);
+                            return null;
+                        }
+                    });
+            String ruleAlarm = (results != null && results.size() > 0 && results.get(0) != null)
+                    ? results.get(0).toString() : "";
+            String patrolAlarm = (results != null && results.size() > 1 && results.get(1) != null)
+                    ? results.get(1).toString() : "";
+            String apiAlarm = (results != null && results.size() > 2 && results.get(2) != null)
+                    ? results.get(2).toString() : "";
 
             java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
             if (!eventAlarm.isEmpty()) {

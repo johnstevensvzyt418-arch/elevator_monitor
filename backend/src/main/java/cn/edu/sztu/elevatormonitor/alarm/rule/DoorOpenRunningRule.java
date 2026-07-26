@@ -44,8 +44,8 @@ public class DoorOpenRunningRule implements AlarmRule {
         }
 
         // 速度阈值: 必须 >0.3m/s（排除到站减速残值和停车误报）
-        // speed=-1 表示速度未计算，此时仅凭方向+门状态判断
-        if (speed >= 0 && speed <= MIN_SPEED_MPS) {
+        // speed=-1 表示速度未计算，此时保守处理不触发告警，避免误报
+        if (speed < 0 || speed <= MIN_SPEED_MPS) {
             return null;
         }
 

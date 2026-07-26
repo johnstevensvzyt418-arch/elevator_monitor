@@ -26,7 +26,7 @@ const (
 	// WebSocket 读超时（Pong 等待时间 + 余量）
 	wsReadDeadline = 45 * time.Second
 	// WebSocket 写超时
-	wsWriteTimeout = 10 * time.Second
+	wsWriteTimeout = 3 * time.Second
 )
 
 type Cache struct {
@@ -281,7 +281,7 @@ func redisSubscriber(redisAddr, redisPassword string) {
 					historyKey := "ai:history:mnk-v2:" + result.DeviceID
 					pipe := rdb.Pipeline()
 					pipe.LPush(ctx, historyKey, msg.Payload)
-					pipe.LTrim(ctx, historyKey, 0, 59)
+					pipe.LTrim(ctx, historyKey, 0, 29)
 					pipe.Expire(ctx, historyKey, 7*24*time.Hour)
 					if _, err := pipe.Exec(ctx); err != nil {
 						log.Printf("[Redis] AI 历史保存失败 deviceId=%s: %v", result.DeviceID, err)
