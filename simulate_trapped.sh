@@ -24,6 +24,7 @@ INTERVAL_SEC="${2:-1}"
 
 # ---- MNK 协议报文段 ----
 SEG1="020000000000517c"       # 内招: charAt(1)='2' → 目标楼层=2 → 有乘客
+SEG1_EMPTY="000000000000517c"  # 无内招(charAt(1)='0') → 目标楼层=无 → 乘客离开
 SEG3="30090000000053c3"       # 运行: [0:2]="30"→平层, [2:4]="09"→2F
 SEG4="d00063000000220e"       # 保留
 
@@ -34,6 +35,29 @@ SEG2_OPEN="00000000000421b9"       # [10:12]="04" → 开门到位 (door="01")
 
 PHASE1_DURATION=10   # 困人阶段持续秒数
 PHASE0_MSGS=1        # 基线阶段消息数
+
+# ---- 预清理：发送正常报文强制清除旧告警标记 ----
+SEG1_NORMAL="000000000000517c"   # 无内招(charAt(1)='0') → 无乘客
+SEG2_NORMAL="00000000001021b9"   # 关门到位
+SEG3_NORMAL="30050000000053c3"   # 平层 + 1F
+
+NOW=$(date +"%Y/%m/%d %H:%M:%S")
+TIME_ONLY=$(date +"%H:%M:%S")
+NORMAL_DATA="F${NOW}/${DEVICE_ID}/${SEG1_NORMAL}${SEG2_NORMAL}${SEG3_NORMAL}${SEG4}"
+
+echo "[Pre] 发送正常报文清除旧告警标记..."
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST "${BACKEND_URL}" \
+    --data-urlencode "data=${NORMAL_DATA}" \
+    --data-urlencode "time=${TIME_ONLY}" \
+    --data-urlencode "elevatorID=${DEVICE_ID}" \
+    --connect-timeout 3 --max-time 5 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "[Pre] ✓ 旧标记已清除"
+else
+    echo "[Pre] ✗ 清除失败 HTTP ${HTTP_CODE}"
+fi
+sleep 1
 
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║       🛗 困人告警模拟脚本 (Bash) v2                 ║"
@@ -48,8 +72,8 @@ echo "║  Phase 2   ~ : 开门到位 → 困人解除, 灯熄灭           ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 echo "[*] 开始发送报文..."
-echo "    ~6s  后前端 alarm_00(困人) ☉ 亮起"
-echo "    ~11s 后门打开, 困人告警解除 ○"
+echo "    ~7s  后前端 alarm_00(困人) ☉ 亮起"
+echo "    ~12s 后门打开, 困人告警解除 ○"
 echo "    按 Ctrl+C 提前停止"
 echo ""
 
@@ -63,8 +87,9 @@ while true; do
     TIME_ONLY=$(date +"%H:%M:%S")
     ELAPSED=$(($(date +%s) - START_TIME))
 
-    # ---- 选择当前阶段的 seg2 (门状态) ----
+    # ---- 选择当前阶段的 seg1(内招) 和 seg2(门状态) ----
     if [ $COUNT -le $PHASE0_MSGS ]; then
+        CURRENT_SEG1="$SEG1"
         CURRENT_SEG2="$SEG2_CLOSED"
         PHASE="Phase 0"
         DOOR_LABEL="关门到位"
@@ -72,17 +97,19 @@ while true; do
         if [ $PHASE1_START -eq 0 ]; then
             PHASE1_START=$(date +%s)
         fi
+        CURRENT_SEG1="$SEG1"
         CURRENT_SEG2="$SEG2_TRANSITION"
         PHASE="Phase 1"
         DOOR_LABEL="开门中"
     else
+        CURRENT_SEG1="$SEG1_EMPTY"
         CURRENT_SEG2="$SEG2_OPEN"
         PHASE="Phase 2"
         DOOR_LABEL="开门到位(解除)"
     fi
 
     # 拼接完整 94 字符报文
-    RAW_DATA="F${NOW}/${DEVICE_ID}/${SEG1}${CURRENT_SEG2}${SEG3}${SEG4}"
+    RAW_DATA="F${NOW}/${DEVICE_ID}/${CURRENT_SEG1}${CURRENT_SEG2}${SEG3}${SEG4}"
 
     # 发送 HTTP POST
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
