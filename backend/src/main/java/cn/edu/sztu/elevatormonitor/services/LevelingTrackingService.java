@@ -82,6 +82,11 @@ public class LevelingTrackingService {
         // 条件不满足 → 完全重置（含告警标记）
         // 困人解除: 门打开了 / 楼层变化 / 乘客离开
         if (!isLeveling || !hasPassenger || isDoorOpen) {
+            // 诊断日志：记录具体是哪个条件不满足，便于排查困人告警未触发的原因
+            LOGGER.info("[Leveling] 设备 {} 困人条件不满足 — 平层={}, 有乘客={}, 门开={} | "
+                    + "cur={}, target={}, door={}, passenger={}",
+                    deviceId, isLeveling, hasPassenger, isDoorOpen,
+                    currentFloor, targetFloor, doorStatus, passenger);
             resetAll(hashKey);
             return null;
         }

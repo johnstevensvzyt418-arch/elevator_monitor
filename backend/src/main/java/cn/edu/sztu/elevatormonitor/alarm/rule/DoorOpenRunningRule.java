@@ -11,6 +11,12 @@ import org.springframework.stereotype.Component;
  * 规则: 开门运行。
  * 电梯在运行过程中（方向非平层00）轿厢门处于开门到位状态(01)时触发告警。
  * 速度阈值 0.3m/s 用于排除到站停车时方向未及时更新导致的误报。
+ *
+ * <h3>v0.1.6 增强</h3>
+ * <ul>
+ *   <li>增加楼层校验：当前楼层≠目标楼层时才是真正的"运行中"，停在目标楼层开门不触发</li>
+ *   <li>结合 SpeedTrackingService 的缓存速度过期机制，消除困人场景下旧速度残留导致误报</li>
+ * </ul>
  */
 @Component
 public class DoorOpenRunningRule implements AlarmRule {
@@ -32,6 +38,8 @@ public class DoorOpenRunningRule implements AlarmRule {
         String dir = msg.getDirection();
         String door = msg.getDoorStatus();
         double speed = msg.getSpeed();
+        String curFloor = msg.getCurrentFloor();
+        String targetFloor = msg.getTargetFloor();
 
         // 仅在电梯运动中检测（方向非平层00）
         if (dir == null || "00".equals(dir)) {
@@ -51,11 +59,17 @@ public class DoorOpenRunningRule implements AlarmRule {
 
         // 门处于开门到位(01)状态 → 开门运行告警
         if ("01".equals(door)) {
+            // v0.1.6: 校验电梯确实在楼层之间运行（非停在目标楼层开门）
+            // 停在目标楼层时开门属于正常操作，不应触发"开门运行"
+            if (curFloor != null && targetFloor != null && curFloor.equals(targetFloor)) {
+                return null;
+            }
+
             String passengerInfo = "01".equals(msg.getPassenger()) ? "（有乘客）" : "";
             return AlarmEvent.fire(msg.getDeviceId(), ruleName(), level(), description(),
                     "门状态=开门到位" + passengerInfo + ", 方向=" + dir
-                            + ", 速度=" + msg.getSpeed() + "m/s, 位于" + msg.getCurrentFloor() + "楼",
-                    msg.getCurrentFloor(), msg.getSpeed());
+                            + ", 速度=" + msg.getSpeed() + "m/s, 位于" + curFloor + "楼",
+                    curFloor, msg.getSpeed());
         }
         return null;
     }
