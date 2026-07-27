@@ -61,7 +61,8 @@ public class DoorOpenRunningRule implements AlarmRule {
         if ("01".equals(door)) {
             // v0.1.6: 校验电梯确实在楼层之间运行（非停在目标楼层开门）
             // 停在目标楼层时开门属于正常操作，不应触发"开门运行"
-            if (curFloor != null && targetFloor != null && curFloor.equals(targetFloor)) {
+            // 使用数值比较兼容 "02" 与 "2" 的前导零差异
+            if (curFloor != null && targetFloor != null && floorsEqual(curFloor, targetFloor)) {
                 return null;
             }
 
@@ -72,5 +73,18 @@ public class DoorOpenRunningRule implements AlarmRule {
                     curFloor, msg.getSpeed());
         }
         return null;
+    }
+
+    /**
+     * 数值化比较两个楼层值，兼容 "01" 与 "1"、"02" 与 "2" 等前导零差异。
+     * 与 LevelingTrackingService.floorEquals 逻辑一致。
+     */
+    private boolean floorsEqual(String f1, String f2) {
+        if (f1 == null || f2 == null) return false;
+        try {
+            return Integer.parseInt(f1) == Integer.parseInt(f2);
+        } catch (NumberFormatException e) {
+            return f1.equals(f2);
+        }
     }
 }

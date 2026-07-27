@@ -117,3 +117,4 @@ Desktop.ini
 *.bak-*
 *.patch
 *.code-workspace
+simulate_trapped.ps1
