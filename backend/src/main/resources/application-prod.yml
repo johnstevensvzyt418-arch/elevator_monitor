@@ -30,7 +30,7 @@ telemetry:
 # 生产环境告警阈值
 alarm:
   leveling:
-    timeout-seconds: 5
+    timeout-seconds: 30
   door-open:
     threshold-seconds: 20
   speed:

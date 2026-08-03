@@ -80,7 +80,7 @@ alarm:
   over-top:
     max-floor: 30
   leveling:
-    timeout-seconds: 5
+    timeout-seconds: 30
   cooldown:
     default-seconds: 300
 

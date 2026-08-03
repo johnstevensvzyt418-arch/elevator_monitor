@@ -42,7 +42,7 @@ public class LevelingTrackingService {
     private static final Logger LOGGER = LoggerFactory.getLogger(LevelingTrackingService.class);
 
     /** 平层超时阈值（秒），可通过配置文件覆盖 */
-    @Value("${alarm.leveling.timeout-seconds:5}")
+    @Value("${alarm.leveling.timeout-seconds:30}")
     private int timeoutSeconds;
 
     /** Redis Hash 键名前缀 */

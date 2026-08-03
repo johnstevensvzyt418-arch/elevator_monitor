@@ -6,6 +6,7 @@ import numpy as np
 
 from calibrate_protocol import WINDOW_SIZE, fit_baseline, load_normal_sequences
 from calibrate_runtime_log import parse_sequences
+from protocol_baseline import DISPLAY_THRESHOLD, ProtocolBaselineScorer
 
 
 class CalibrationTest(unittest.TestCase):
@@ -48,6 +49,37 @@ class CalibrationTest(unittest.TestCase):
         self.assertEqual(1, len(sequences))
         self.assertEqual(6, sequences[0].shape[0])
         self.assertTrue(np.all(sequences[0][:, 4] == 1.0))
+
+    def test_deployment_baseline_accepts_four_to_one_and_rejects_clear_anomalies(self):
+        baseline = Path(__file__).parent / "trained_models" / "mnk" / \
+            "protocol-baseline-v2-five-window.npz"
+        scorer = ProtocolBaselineScorer(baseline, "p95")
+
+        normal_four_to_one = np.asarray([
+            [0, 4, 1, 2, 1],
+            [0, 4, 1, 2, 1],
+            [0, 3, 1, 2, 1],
+            [0, 2, 1, 2, 1],
+            [0, 1, 1, 0, 1],
+        ], dtype=np.float64)
+        floor_jump = np.asarray([
+            [0, 4, 1, 2, 1],
+            [0, 4, 1, 2, 1],
+            [0, 1, 1, 2, 1],
+            [0, 4, 1, 2, 1],
+            [0, 1, 1, 0, 1],
+        ], dtype=np.float64)
+        long_interval = np.asarray([
+            [0, 4, 1, 2, 10],
+            [0, 4, 1, 2, 10],
+            [0, 3, 1, 2, 10],
+            [0, 2, 1, 2, 10],
+            [0, 1, 1, 0, 10],
+        ], dtype=np.float64)
+
+        self.assertLess(scorer.score(normal_four_to_one)[0], DISPLAY_THRESHOLD)
+        self.assertGreater(scorer.score(floor_jump)[0], DISPLAY_THRESHOLD)
+        self.assertGreater(scorer.score(long_interval)[0], DISPLAY_THRESHOLD)
 
 
 if __name__ == "__main__":
