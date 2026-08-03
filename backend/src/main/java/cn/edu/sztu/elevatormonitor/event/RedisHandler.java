@@ -81,23 +81,6 @@ public class RedisHandler {
             stringRedisTemplate.opsForHash().put(tsKey, "lastMessageTime",
                     String.valueOf(Instant.now().getEpochSecond()));
 
-            // 1c. 关门到位时同步 lastDoorClosedTime，防止巡检器读到过期时间戳误报 DOOR_OPEN_TOO_LONG
-            if ("00".equals(event.getDoorStatus())) {
-                stringRedisTemplate.opsForHash().put(tsKey, "lastDoorClosedTime",
-                        String.valueOf(Instant.now().getEpochSecond()));
-            }
-
-            // 1d. 楼层变化时同步 lastMoveTime/lastFloor，供巡检器闲置检测
-            String currentFloor = event.getCurrentFloor();
-            if (currentFloor != null && !currentFloor.isEmpty()) {
-                String prevFloor = (String) stringRedisTemplate.opsForHash().get(tsKey, "lastFloor");
-                if (prevFloor == null || !prevFloor.equals(currentFloor)) {
-                    stringRedisTemplate.opsForHash().put(tsKey, "lastMoveTime",
-                            String.valueOf(Instant.now().getEpochSecond()));
-                    stringRedisTemplate.opsForHash().put(tsKey, "lastFloor", currentFloor);
-                }
-            }
-
             // 2. PUBLISH — 实时推送给 Go WebSocket 订阅者
             stringRedisTemplate.convertAndSend(CHANNEL_ELEVATOR_STATUS, json);
             LOGGER.debug("[RedisHandler] PUBLISH elevator:status => OK, deviceId={}", deviceId);
