@@ -12,11 +12,10 @@ WORKDIR /build
 
 # 先复制 pom.xml，利用 Docker 缓存层加速构建
 COPY pom.xml .
-RUN mvn dependency:go-offline -B -q || true
 
 # 再复制源码，先运行本次部署的关键单元测试，再编译
 COPY src ./src
-RUN mvn -Dtest=TimeSeriesBufferTest,TelemetryDedupServiceTest test -B -q
+RUN timeout 300 mvn -Dtest=TimeSeriesBufferTest,TelemetryDedupServiceTest test -B
 RUN mvn package -DskipTests -B -q
 
 # ---- 阶段2：运行 ----
