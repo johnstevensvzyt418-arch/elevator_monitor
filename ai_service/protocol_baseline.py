@@ -42,6 +42,8 @@ class BaselineMetadata:
     calibration_count: int
     raw_threshold: float
     score_mode: str
+    window_size: int
+    max_gap_seconds: float
 
 
 class ProtocolBaselineScorer:
@@ -56,6 +58,8 @@ class ProtocolBaselineScorer:
         self.calibration_count = int(np.asarray(params["calibration_count"]).item())
         saved_mode = str(np.asarray(params["score_mode"]).item())
         self.score_mode = score_mode or saved_mode
+        self.window_size = int(np.asarray(params["window_size"]).item())
+        self.max_gap_seconds = float(np.asarray(params["max_gap_seconds"]).item())
 
         if self.schema_version != FEATURE_SCHEMA:
             raise ValueError(
@@ -65,6 +69,8 @@ class ProtocolBaselineScorer:
             raise ValueError("invalid MNK baseline dimensions")
         if not np.isfinite(self.raw_threshold) or self.raw_threshold <= 0:
             raise ValueError("raw_threshold must be positive and finite")
+        if self.window_size != 5:
+            raise ValueError(f"baseline window_size must be 5, got {self.window_size}")
 
     @property
     def metadata(self) -> BaselineMetadata:
@@ -73,9 +79,15 @@ class ProtocolBaselineScorer:
             calibration_count=self.calibration_count,
             raw_threshold=self.raw_threshold,
             score_mode=self.score_mode,
+            window_size=self.window_size,
+            max_gap_seconds=self.max_gap_seconds,
         )
 
     def score(self, sequence: np.ndarray) -> tuple[float, float]:
+        if np.asarray(sequence).shape[0] != self.window_size:
+            raise ValueError(
+                f"sequence length must be {self.window_size}, got {np.asarray(sequence).shape[0]}"
+            )
         vectors = temporal_vectors(sequence)
         diff = vectors - self.center
         timestep_scores = np.einsum(

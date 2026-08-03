@@ -23,6 +23,10 @@ logging:
   level:
     cn.edu.sztu: info
 
+telemetry:
+  dedup:
+    ttl-seconds: 30
+
 # 生产环境告警阈值
 alarm:
   leveling:

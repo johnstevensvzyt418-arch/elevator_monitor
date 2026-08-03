@@ -14,8 +14,9 @@ WORKDIR /build
 COPY pom.xml .
 RUN mvn dependency:go-offline -B -q || true
 
-# 再复制源码并编译（跳过测试）
+# 再复制源码，先运行本次部署的关键单元测试，再编译
 COPY src ./src
+RUN mvn -Dtest=TimeSeriesBufferTest,TelemetryDedupServiceTest test -B -q
 RUN mvn package -DskipTests -B -q
 
 # ---- 阶段2：运行 ----

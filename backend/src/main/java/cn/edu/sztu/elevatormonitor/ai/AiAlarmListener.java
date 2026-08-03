@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
 
@@ -30,7 +31,10 @@ public class AiAlarmListener {
     private static final String HASH_AI_RESULT = "elevator:ai_result";
     private static final String CHANNEL_AI_RESULT = "elevator:ai_result";
 
-    private static final int WINDOW_MIN_SIZE = 10;
+    private static final int WINDOW_MIN_SIZE = 5;
+    private static final long MAX_SAMPLE_GAP_SECONDS = 10;
+    private static final double FIRST_SAMPLE_INTERVAL_SECONDS = 1.0;
+    private static final ZoneId DEVICE_TIME_ZONE = ZoneId.of("Asia/Shanghai");
     private static final String FEATURE_SCHEMA = AiPredictClient.FEATURE_SCHEMA;
 
     private final TimeSeriesBuffer timeSeriesBuffer;
@@ -56,8 +60,15 @@ public class AiAlarmListener {
     public void onElevatorEvent(ElevatorEvent event) {
         try {
             String deviceId = event.getDeviceId();
-            double[] features = extractFeatures(event);
-            timeSeriesBuffer.append(deviceId, features, WINDOW_MIN_SIZE * 2);
+            double[] features = extractBaseFeatures(event);
+            Long deviceSampleTime = resolveDeviceSampleTime(event);
+            boolean windowReset = timeSeriesBuffer.appendContinuousWithInterval(
+                    deviceId, features, deviceSampleTime,
+                    WINDOW_MIN_SIZE, MAX_SAMPLE_GAP_SECONDS,
+                    FIRST_SAMPLE_INTERVAL_SECONDS);
+            if (windowReset) {
+                LOGGER.info("[AI-Listener] restarted continuous collection deviceId={}", deviceId);
+            }
 
             long currentSize = timeSeriesBuffer.size(deviceId);
             LOGGER.debug("[AI-Listener] buffer deviceId={} size={}/{}",
@@ -74,8 +85,8 @@ public class AiAlarmListener {
         }
     }
 
-    private double[] extractFeatures(ElevatorEvent event) {
-        double[] features = new double[5];
+    private double[] extractBaseFeatures(ElevatorEvent event) {
+        double[] features = new double[4];
         features[0] = TimeSeriesBuffer.parseDoorStatus(event.getDoorStatus());
         features[1] = TimeSeriesBuffer.parseFloor(event.getCurrentFloor());
         features[2] = TimeSeriesBuffer.parseFloor(event.getTargetFloor());
@@ -83,9 +94,15 @@ public class AiAlarmListener {
             features[2] = features[1];
         }
         features[3] = TimeSeriesBuffer.parseDirection(event.getDirection());
-        double speed = event.getSpeed();
-        features[4] = Double.isFinite(speed) ? Math.max(0.0, speed) : 0.0;
         return features;
+    }
+
+    private Long resolveDeviceSampleTime(ElevatorEvent event) {
+        if (event.getDeviceTime() == null) {
+            LOGGER.warn("[AI-Listener] missing device timestamp deviceId={}", event.getDeviceId());
+            return null;
+        }
+        return event.getDeviceTime().atZone(DEVICE_TIME_ZONE).toEpochSecond();
     }
 
     private void performInference(String deviceId) {
@@ -137,6 +154,7 @@ public class AiAlarmListener {
     }
 
     private void publishCollectingState(String deviceId, long sampleCount) {
+        clearAiAlarm(deviceId);
         String json = String.format(Locale.US,
                 "{\"type\":\"AI_RESULT\",\"deviceId\":\"%s\",\"schemaVersion\":\"%s\",\"state\":\"COLLECTING\",\"ready\":false,\"sampleCount\":%d,\"requiredSamples\":%d,\"updatedAt\":\"%s\"}",
                 jsonEscape(deviceId), FEATURE_SCHEMA, sampleCount, WINDOW_MIN_SIZE, Instant.now().toString());

@@ -2,11 +2,14 @@ package cn.edu.sztu.elevatormonitor.ai;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
 /**
@@ -26,7 +29,7 @@ import java.util.stream.Collectors;
  *   <li>当前楼层 → 整数</li>
  *   <li>目标楼层 → 整数</li>
  *   <li>运行方向 → 数值 (00=0, 01=1, 02=2)</li>
- *   <li>速度 / 乘客状态</li>
+ *   <li>相邻设备报文的时间间隔（秒）</li>
  * </ol>
  *
  * @author ai-integration
@@ -40,13 +43,23 @@ public class TimeSeriesBuffer {
     /** Redis Key 前缀 */
     private static final String KEY_PREFIX = "ai:series:mnk-v2:";
 
+    /** 当前连续窗口最后一条设备数据的时间。 */
+    private static final String LAST_SAMPLE_PREFIX = "ai:last-sample:mnk-v2:";
+
     /** 滑动窗口默认大小 */
-    private static final int DEFAULT_WINDOW_SIZE = 20;
+    private static final int DEFAULT_WINDOW_SIZE = 5;
 
     private final StringRedisTemplate redis;
+    private final LongSupplier epochSeconds;
 
+    @Autowired
     public TimeSeriesBuffer(StringRedisTemplate redis) {
+        this(redis, () -> java.time.Instant.now().getEpochSecond());
+    }
+
+    TimeSeriesBuffer(StringRedisTemplate redis, LongSupplier epochSeconds) {
         this.redis = redis;
+        this.epochSeconds = epochSeconds;
     }
 
     // ============================================================
@@ -87,6 +100,107 @@ public class TimeSeriesBuffer {
         }
     }
 
+    /**
+     * 追加一条样本，并确保窗口内设备时间连续。
+     */
+    public boolean appendContinuous(String deviceId, double[] features,
+                                    int windowSize, long maxGapSeconds) {
+        return appendContinuous(deviceId, features, epochSeconds.getAsLong(),
+                windowSize, maxGapSeconds);
+    }
+
+    public boolean appendContinuous(String deviceId, double[] features,
+                                    Long sampleEpochSeconds,
+                                    int windowSize, long maxGapSeconds) {
+        return appendContinuousInternal(deviceId, features, sampleEpochSeconds,
+                windowSize, maxGapSeconds, null);
+    }
+
+    /**
+     * 追加四个基础特征，并以设备时间差生成第五个特征。
+     */
+    public boolean appendContinuousWithInterval(String deviceId, double[] baseFeatures,
+                                                Long sampleEpochSeconds,
+                                                int windowSize, long maxGapSeconds,
+                                                double firstIntervalSeconds) {
+        if (baseFeatures == null || baseFeatures.length != 4) {
+            throw new IllegalArgumentException("baseFeatures must contain exactly 4 values");
+        }
+        double[] features = Arrays.copyOf(baseFeatures, 5);
+        return appendContinuousInternal(deviceId, features, sampleEpochSeconds,
+                windowSize, maxGapSeconds, firstIntervalSeconds);
+    }
+
+    private boolean appendContinuousInternal(String deviceId, double[] features,
+                                             Long sampleEpochSeconds,
+                                             int windowSize, long maxGapSeconds,
+                                             Double firstIntervalSeconds) {
+        String key = KEY_PREFIX + deviceId;
+        String lastSampleKey = LAST_SAMPLE_PREFIX + deviceId;
+        boolean reset = false;
+
+        try {
+            Long size = redis.opsForList().size(key);
+            String previousValue = redis.opsForValue().get(lastSampleKey);
+            long gapSeconds = Long.MIN_VALUE;
+
+            if (size != null && size > 0) {
+                if (sampleEpochSeconds == null || previousValue == null) {
+                    reset = true;
+                } else {
+                    try {
+                        gapSeconds = sampleEpochSeconds - Long.parseLong(previousValue);
+                        reset = gapSeconds < 0 || gapSeconds > maxGapSeconds;
+
+                        if (gapSeconds == 0) {
+                            String previousJson = redis.opsForList().index(key, 0);
+                            List<Double> previousFeatures = previousJson == null
+                                    ? java.util.Collections.emptyList()
+                                    : jsonToFeatures(previousJson);
+                            if (previousFeatures.size() >= 2
+                                    && Double.compare(previousFeatures.get(1), features[1]) != 0) {
+                                reset = true;
+                                LOGGER.warn("[TS-Buffer] same-timestamp floor conflict deviceId={} previousFloor={} currentFloor={}",
+                                        deviceId, previousFeatures.get(1), features[1]);
+                            }
+                        }
+                    } catch (NumberFormatException ignored) {
+                        reset = true;
+                    }
+                }
+            }
+
+            if (reset) {
+                redis.delete(key);
+                size = 0L;
+                LOGGER.info("[TS-Buffer] reset discontinuous window deviceId={} maxGapSeconds={}",
+                        deviceId, maxGapSeconds);
+            }
+
+            if (firstIntervalSeconds != null) {
+                double intervalSeconds = firstIntervalSeconds;
+                if (!reset && size != null && size > 0 && gapSeconds > 0) {
+                    intervalSeconds = gapSeconds;
+                }
+                features[4] = intervalSeconds;
+            }
+
+            String json = featuresToJson(features);
+            redis.opsForList().leftPush(key, json);
+            redis.opsForList().trim(key, 0, windowSize - 1L);
+            if (sampleEpochSeconds == null) {
+                redis.delete(lastSampleKey);
+            } else {
+                redis.opsForValue().set(lastSampleKey, String.valueOf(sampleEpochSeconds));
+            }
+            return reset;
+        } catch (Exception e) {
+            LOGGER.error("[TS-Buffer] continuous append failed deviceId={}: {}",
+                    deviceId, e.getMessage());
+            return reset;
+        }
+    }
+
     // ============================================================
     // 读取：取出指定设备的完整窗口序列
     // ============================================================
@@ -119,8 +233,8 @@ public class TimeSeriesBuffer {
                 return java.util.Collections.emptyList();
             }
 
-            // LRANGE 0 -1: 取全部（从最新到最旧）
-            List<String> rawList = redis.opsForList().range(key, 0, -1);
+            // 只读取模型需要的固定长度，避免旧尖峰持续污染得分。
+            List<String> rawList = redis.opsForList().range(key, 0, minLength - 1L);
             if (rawList == null || rawList.isEmpty()) {
                 return java.util.Collections.emptyList();
             }

@@ -44,19 +44,22 @@ public class MNKApplicationService {
     private final LevelingTrackingService levelingTrackingService;
     private final DistanceTrackingService distanceTrackingService;
     private final StringRedisTemplate stringRedisTemplate;
+    private final TelemetryDedupService telemetryDedupService;
 
     public MNKApplicationService(MNKParser parser,
                                  EventPublisher eventPublisher,
                                  SpeedTrackingService speedTrackingService,
                                  LevelingTrackingService levelingTrackingService,
                                  DistanceTrackingService distanceTrackingService,
-                                 StringRedisTemplate stringRedisTemplate) {
+                                 StringRedisTemplate stringRedisTemplate,
+                                 TelemetryDedupService telemetryDedupService) {
         this.parser = parser;
         this.eventPublisher = eventPublisher;
         this.speedTrackingService = speedTrackingService;
         this.levelingTrackingService = levelingTrackingService;
         this.distanceTrackingService = distanceTrackingService;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.telemetryDedupService = telemetryDedupService;
     }
 
     /**
@@ -97,6 +100,11 @@ public class MNKApplicationService {
                             : (rawData != null ? rawData.substring(0, 200) + "..." : "null"),
                     e);
             return -2;
+        }
+
+        if (telemetryDedupService.isDuplicate(frame.getDeviceId(), rawData)) {
+            LOGGER.debug("[MNK-App] duplicate report ignored deviceId={}", frame.getDeviceId());
+            return 0;
         }
 
         // ---- 3. 有状态字段填充（跨请求累积值） ----

@@ -62,6 +62,10 @@ elevator:
   storage:
     type: mysql
 
+telemetry:
+  dedup:
+    ttl-seconds: 30
+
 alarm:
   long-idle:
     threshold-seconds: 60

@@ -67,6 +67,7 @@ class HealthResponse(BaseModel):
     scoring_backend: str
     schema_version: str
     calibration_count: int
+    window_size: int
 
 
 # ============================================================
@@ -111,6 +112,7 @@ def load_model():
         print(
             f"[AI] MNK 协议基线加载完成: schema={feature_schema}, "
             f"normal_rows={baseline_scorer.calibration_count}, "
+            f"window_size={baseline_scorer.window_size}, "
             f"raw_threshold={baseline_scorer.raw_threshold:.4f}"
         )
         return
@@ -253,6 +255,7 @@ app = FastAPI(
 async def health():
     """健康检查。"""
     calibration_count = baseline_scorer.calibration_count if baseline_scorer else 0
+    window_size = baseline_scorer.window_size if baseline_scorer else 0
     return HealthResponse(
         status="ok",
         model_type=model_type,
@@ -261,6 +264,7 @@ async def health():
         scoring_backend=scoring_backend,
         schema_version=feature_schema,
         calibration_count=calibration_count,
+        window_size=window_size,
     )
 
 

@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r req
 # 复制所有模型文件
 COPY config.toml .
 COPY infer_server.py .
+COPY calibrate_protocol.py .
+COPY calibrate_runtime_log.py .
 COPY protocol_baseline.py .
 COPY model/ ./model/
 COPY trained_models/ ./trained_models/
