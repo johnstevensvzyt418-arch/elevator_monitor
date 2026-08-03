@@ -4,6 +4,7 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.integration.annotation.ServiceActivator;
@@ -120,8 +121,14 @@ public class MqttConfig {
 
     /**
      * MQTT 消息驱动适配器 — 订阅设备上报 + 命令回执主题，路由到 mqttInputChannel。
+     *
+     * <p><b>禁用开关 (2026-08-03):</b> 通过 {@code mqtt.enabled=false} 可关闭后端直连 MQTT。
+     * 若改用独立的 mqtt_bridge.py 转发（docker compose --profile bridge），
+     * 必须关闭本订阅，否则同一条设备报文会被后端 MQTT 与 bridge 双重处理，
+     * 导致速度计算被除零放大（误报超速）、运行次数翻倍。</p>
      */
     @Bean
+    @ConditionalOnProperty(name = "mqtt.enabled", havingValue = "true", matchIfMissing = true)
     public MessageProducer mqttInbound() {
         // 合并订阅: 设备上报 + 命令回执
         String[] topics = {topic, commandUpTopic};

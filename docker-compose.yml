@@ -83,6 +83,9 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # MQTT Broker（远程）
+      # 默认后端直连 MQTT；若改用 mqtt-bridge 转发(profile bridge)，务必设置 MQTT_ENABLED=false，
+      # 否则同一条报文会被后端 MQTT 与 bridge 双重处理 → 速度除零放大误报超速、运行次数翻倍
+      MQTT_ENABLED: ${MQTT_ENABLED:-true}
       MQTT_BROKER_URL: ${MQTT_BROKER_URL:-tcp://tcp.sealosbja.site:35205}
       MQTT_CLIENT_ID: elevator-monitor-server
       MQTT_USERNAME: ${MQTT_USERNAME:-}
@@ -162,6 +165,8 @@ services:
   # ==========================================================
   # 6. MQTT 桥接器 (Python — 可选，仅当后端不直接连接 MQTT 时启用)
   #     启用方式: docker compose --profile bridge up -d
+  #     注意: 使用本桥接器时必须同时设置 MQTT_ENABLED=false，
+  #           避免后端 MQTT 与桥接器双重处理同一设备报文。
   # ==========================================================
   mqtt-bridge:
     build:

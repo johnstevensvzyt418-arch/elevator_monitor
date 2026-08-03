@@ -101,7 +101,13 @@ public class ElevatorMessage {
             String t2 = timeQueue.poll();
             float secondDiff = TimeDiff.getSecondDiff(t1, t2);
             LOGGER.debug(""+secondDiff);
-            speed = (double) Math.round((2.8/secondDiff)*100)/100;// 保留两位小数
+            if (secondDiff > 0) {
+                speed = (double) Math.round((2.8/secondDiff)*100)/100;// 保留两位小数
+            } else {
+                // 时间差≤0（同秒或乱序）：无法计算瞬时速度，
+                // 保持原速度，避免除零得到天文数字导致误报超速
+                LOGGER.debug("[Speed] 时间差<=0, 保留原速度 {}", speed);
+            }
             timeQueue.offer(t1);
             timeQueue.offer(t2);
             LOGGER.debug("speed "+speed);

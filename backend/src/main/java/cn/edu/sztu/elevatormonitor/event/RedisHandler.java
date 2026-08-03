@@ -126,7 +126,8 @@ public class RedisHandler {
     }
 
     private static String formatSpeed(double speed) {
-        if (speed < 0) return "";  // 未计算
+        // 防御: 过滤未计算/非有限值（NaN/Infinity），避免前端显示 Infinity
+        if (speed < 0 || Double.isNaN(speed) || Double.isInfinite(speed)) return "";
         return String.format("%.2f", speed) + "m/s";
     }
 

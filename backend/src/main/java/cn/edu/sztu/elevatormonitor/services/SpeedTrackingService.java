@@ -152,49 +152,21 @@ public class SpeedTrackingService {
         int floorDiff = Math.abs(curFloor - prevFloor);
         long timeDiffSec = Math.abs(currentEpoch - lastEpoch);
 
-        // 平层（方向=00）→ 速度平滑归零（3s 延迟），避免前端速度显示频繁闪烁
-        // 同时保留 lastMovingSpeed 供下次启动时参考
+        // 平层（方向=00）→ 停稳即显示 0（不再做 3s 平滑延迟归零）
         if ("00".equals(direction)) {
-            // 获取进入平层的时间戳
-            String levelingStartEpochStr = lastState != null ? (String) lastState.get("levelingStartEpoch") : null;
-            long levelingStartEpoch;
-            try {
-                levelingStartEpoch = (levelingStartEpochStr != null)
-                        ? Long.parseLong(levelingStartEpochStr) : 0;
-            } catch (NumberFormatException e) {
-                levelingStartEpoch = 0;
-            }
-
-            // 首次进入平层或之前不在平层状态 → 记录开始时间
-            if (levelingStartEpoch == 0) {
-                levelingStartEpoch = currentEpoch;
-                stringRedisTemplate.opsForHash().put(hashKey, "levelingStartEpoch", String.valueOf(currentEpoch));
-            }
-
-            long secSinceLeveling = Math.abs(currentEpoch - levelingStartEpoch);
-
             // 更新基础状态
             stringRedisTemplate.opsForHash().put(hashKey, "lastFloor", currentFloor);
             stringRedisTemplate.opsForHash().put(hashKey, "lastTimeEpoch", String.valueOf(currentEpoch));
             stringRedisTemplate.opsForHash().put(hashKey, "lastFloorChangeEpoch", String.valueOf(currentEpoch));
-
-            if (secSinceLeveling <= CACHED_SPEED_MAX_AGE_SEC && lastMovingSpeed > 0.0) {
-                // 3s 内：保持显示上次运行速度，实现平滑过渡，防止速度数字频繁跳变
-                // 注意：仅影响前端显示值，告警规则引擎不受影响（DoorOpenRunningRule 在 dir=00 时直接返回 null）
-                stringRedisTemplate.opsForHash().put(hashKey, "lastSpeed", String.valueOf(lastMovingSpeed));
-                LOGGER.debug("[SpeedTrack] 设备 {} 平层过渡中(已{}s/{}s), 保持显示速度={}m/s",
-                        deviceId, secSinceLeveling, CACHED_SPEED_MAX_AGE_SEC,
-                        String.format("%.2f", lastMovingSpeed));
-                return lastMovingSpeed;
-            }
-
-            // 超过 3s → 真正归零
+            // 平层/停稳 → 速度立即归零。
+            // 注意：DoorOpenRunningRule 在 dir=00 时直接返回 null，不受此速度影响；
+            // lastMovingSpeed 保留供下一次行程"启动预估"使用。
             stringRedisTemplate.opsForHash().put(hashKey, "lastSpeed", "0.0");
-            LOGGER.debug("[SpeedTrack] 设备 {} 平层停止{}s, 速度归零 (lastMovingSpeed={}m/s)",
-                    deviceId, secSinceLeveling, String.format("%.2f", lastMovingSpeed));
+            LOGGER.debug("[SpeedTrack] 设备 {} 平层停稳, 速度立即归零 (lastMovingSpeed={}m/s)",
+                    deviceId, String.format("%.2f", lastMovingSpeed));
             return 0.0;
         } else {
-            // 非平层 → 清除 levelingStartEpoch，下次进入平层时重新计时
+            // 非平层 → 清除 levelingStartEpoch（保留字段兼容旧数据，不再参与显示逻辑）
             stringRedisTemplate.opsForHash().put(hashKey, "levelingStartEpoch", "0");
         }
 
@@ -205,16 +177,30 @@ public class SpeedTrackingService {
             stringRedisTemplate.opsForHash().put(hashKey, "lastTimeEpoch", String.valueOf(currentEpoch));
             stringRedisTemplate.opsForHash().put(hashKey, "lastFloorChangeEpoch", String.valueOf(currentEpoch));
 
-            double distance = floorDiff * FLOOR_HEIGHT_M;
-            double speed = distance / timeDiffSec;
+            double speed;
+            if (timeDiffSec <= 0) {
+                // 两条楼层变化报文落在同一秒（设备高频上报 / 双路径重复处理）：
+                // 无法计算瞬时速度，保留上次有效速度，避免除零得到 Infinity
+                // 导致 SpeedAbnormalRule 误报超速、前端显示 Infinity。
+                speed = (cachedSpeed > 0.0) ? cachedSpeed : lastMovingSpeed;
+                LOGGER.debug("[SpeedTrack] 设备 {} 楼层变化但间隔{}s, 保留速度={}m/s",
+                        deviceId, timeDiffSec, String.format("%.2f", speed));
+            } else {
+                double distance = floorDiff * FLOOR_HEIGHT_M;
+                speed = distance / timeDiffSec;
+            }
+
+            // 防御: 兜底过滤非有限值（NaN/Infinity），避免污染 Redis 与前端
+            if (Double.isNaN(speed) || Double.isInfinite(speed)) {
+                speed = 0.0;
+            }
 
             // 缓存本次计算的有效速度（含 lastMovingSpeed，不平层时不清零）
             stringRedisTemplate.opsForHash().put(hashKey, "lastSpeed", String.valueOf(speed));
             stringRedisTemplate.opsForHash().put(hashKey, "lastMovingSpeed", String.valueOf(speed));
 
-            LOGGER.info("[SpeedTrack] 设备 {}: {}F→{}F, 间隔{}s, 距离{}m, 速度={}m/s",
-                    deviceId, prevFloor, curFloor, timeDiffSec,
-                    String.format("%.1f", distance), String.format("%.2f", speed));
+            LOGGER.info("[SpeedTrack] 设备 {}: {}F→{}F, 间隔{}s, 速度={}m/s",
+                    deviceId, prevFloor, curFloor, timeDiffSec, String.format("%.2f", speed));
             return speed;
         }
 
