@@ -143,8 +143,9 @@ public class ScheduledAlarmChecker {
                     }
 
                     // ---- 检查3: 门未关超时 ----
-                    if (!"00".equals(door) && !door.isEmpty()) {
-                        updateTimestampIfDoorClosed(timestampsKey, door, nowSec);
+                    // 困人（平层+有乘客+门打不开超时）已触发时, 门无法关闭是困人的表现,
+                    // 由 LEVELING_TIMEOUT 覆盖, 不再重复触发"门超时", 避免演示误亮"开门运行"灯
+                    if (levelingAlarm == null && !"00".equals(door) && !door.isEmpty()) {
                         String lastClosedStr = (String) stringRedisTemplate.opsForHash()
                                 .get(timestampsKey, "lastDoorClosedTime");
                         if (lastClosedStr != null) {
@@ -219,8 +220,10 @@ public class ScheduledAlarmChecker {
         try {
             String newAlarm = String.join(",", patrolAlarms);
 
-            // 更新 marker key（核心：RedisHandler.mergeAlarms 读取此 key）
-            stringRedisTemplate.opsForHash().put(HASH_STATUS, deviceId + MARKER_PATROL_ALARM, newAlarm);
+            // 读取旧的巡检 marker（本次巡检前已写入的）
+            Object oldMarkerObj = stringRedisTemplate.opsForHash()
+                    .get(HASH_STATUS, deviceId + MARKER_PATROL_ALARM);
+            String oldMarker = (oldMarkerObj != null) ? oldMarkerObj.toString() : "";
 
             // 保留事件路径的告警（如 LEVELING_TIMEOUT），只替换巡检告警部分
             // 读取当前 status 中的 Alarm 字段，分离事件告警和巡检告警
@@ -242,6 +245,19 @@ public class ScheduledAlarmChecker {
             Set<String> merged = new LinkedHashSet<>(eventAlarms);
             merged.addAll(patrolAlarms);
             String finalAlarm = String.join(",", merged);
+
+            // 巡检告警与最终告警均未发生变化 → 直接返回，跳过更新与发布。
+            // 修复: 原实现每 10s 无条件重发 status + alarm, 导致:
+            //   1) 离线设备状态被"续命", 前端 lastSeen/lastDataTime 不断刷新,
+            //      客户端 90s/120s 离线判定被破坏;
+            //   2) 前端每 10s 重复弹出"设备离线"提示;
+            //   3) 离线状态的显示完全依赖告警消息的到达顺序, 非常脆弱。
+            if (newAlarm.equals(oldMarker) && finalAlarm.equals(currentAlarm)) {
+                return;
+            }
+
+            // 更新 marker key（核心：RedisHandler.mergeAlarms 读取此 key）
+            stringRedisTemplate.opsForHash().put(HASH_STATUS, deviceId + MARKER_PATROL_ALARM, newAlarm);
 
             // 重建 JSON
             StringBuilder sb = new StringBuilder("{");

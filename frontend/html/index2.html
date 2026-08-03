@@ -373,33 +373,32 @@
             resetAllAlarms();
             var alarmStr = obj.Alarm || '';
             if (alarmStr) {
-                var matched = false;
-                // 先尝试数字编码匹配
+                // 先尝试数字编码匹配（如 "00"~"07"）
                 for (var code in ALARM_MAP) {
                     if (alarmStr.indexOf(code) > -1) {
                         setAlarmOn(ALARM_MAP[code]);
-                        matched = true;
                     }
                 }
-                // 字符串回退匹配（兼容后端告警规则引擎命名的告警码）
-                if (!matched) {
-                    if (alarmStr.indexOf('LEVELING') > -1 || alarmStr.indexOf('TIMEOUT') > -1) setAlarmOn(0);
-                    if (alarmStr.indexOf('ALARM_FIELD') > -1) setAlarmOn(0);
-                    if (alarmStr.indexOf('LOW_SPEED') > -1) setAlarmOn(2);
-                    else if (alarmStr.indexOf('SPEED_ABNORMAL') > -1) setAlarmOn(1);
-                    else if (alarmStr.indexOf('SPEED') > -1) setAlarmOn(1);
-                    if (alarmStr.indexOf('OVER_TOP') > -1) setAlarmOn(3);
-                    if (alarmStr.indexOf('FLOOR_JUMP') > -1) setAlarmOn(4);
-                    if (alarmStr.indexOf('DOOR_OPEN_RUNNING') > -1) {
-                        setAlarmOn(5);
-                        // 开门载人运行：DOOR_OPEN_RUNNING + 有乘客
-                        if (obj.Passenger === '01') setAlarmOn(6);
-                    }
-                    if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(5);
-                    if (alarmStr.indexOf('HARDWARE_FAULT') > -1) setAlarmOn(7);
-                    if (alarmStr.indexOf('DIRECTION') > -1) setAlarmOn(7);
-                    if (alarmStr.indexOf('LONG_IDLE') > -1 || alarmStr.indexOf('IDLE') > -1) setAlarmOn(7);
+                // 字符串规则匹配（后端告警规则引擎命名）。
+                // 注意: 不能因为命中数字码就跳过字符串匹配,
+                // 否则 Alarm 含任意数字时会漏掉 LEVELING/DOOR_OPEN_RUNNING 等规则告警灯
+                if (alarmStr.indexOf('LEVELING') > -1 || alarmStr.indexOf('TIMEOUT') > -1) setAlarmOn(0);
+                if (alarmStr.indexOf('ALARM_FIELD') > -1) setAlarmOn(0);
+                if (alarmStr.indexOf('LOW_SPEED') > -1) setAlarmOn(2);
+                else if (alarmStr.indexOf('SPEED_ABNORMAL') > -1) setAlarmOn(1);
+                else if (alarmStr.indexOf('SPEED') > -1) setAlarmOn(1);
+                if (alarmStr.indexOf('OVER_TOP') > -1) setAlarmOn(3);
+                if (alarmStr.indexOf('FLOOR_JUMP') > -1) setAlarmOn(4);
+                if (alarmStr.indexOf('DOOR_OPEN_RUNNING') > -1) {
+                    setAlarmOn(5);
+                    // 开门载人运行：DOOR_OPEN_RUNNING + 有乘客
+                    if (obj.Passenger === '01') setAlarmOn(6);
                 }
+                // 门超时未关 ≠ 开门运行, 不占用 alarm_05(开门运行) 灯, 归入其他告警(alarm_07)
+                if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(7);
+                if (alarmStr.indexOf('HARDWARE_FAULT') > -1) setAlarmOn(7);
+                if (alarmStr.indexOf('DIRECTION') > -1) setAlarmOn(7);
+                if (alarmStr.indexOf('LONG_IDLE') > -1 || alarmStr.indexOf('IDLE') > -1) setAlarmOn(7);
             }
 
             // 更新时间 & 刷新设备在线状态

@@ -42,6 +42,16 @@ public class ElevatorMessageRepository {
             // 1. HSET — 持久化最新状态，支持按 deviceId 查询
             stringRedisTemplate.opsForHash().put("elevator:status", deviceId, json);
 
+            // 1b. 更新最后消息时间戳，供 ScheduledAlarmChecker 巡检设备离线
+            //     （V1 协议路径必需：否则离线检测读不到 lastMessageTime）
+            try {
+                stringRedisTemplate.opsForHash().put(
+                        "elevator:timestamps:" + deviceId, "lastMessageTime",
+                        String.valueOf(java.time.Instant.now().getEpochSecond()));
+            } catch (Exception tsEx) {
+                LOGGER.debug("[Redis] 时间戳更新失败(Redis不可用?): {}", tsEx.getMessage());
+            }
+
             // 2. PUBLISH — 实时推送给 Go WebSocket 订阅者
             stringRedisTemplate.convertAndSend(CHANNEL_ELEVATOR_STATUS, json);
             LOGGER.debug("[Redis] 消息已发布到频道 {}, deviceId={}",

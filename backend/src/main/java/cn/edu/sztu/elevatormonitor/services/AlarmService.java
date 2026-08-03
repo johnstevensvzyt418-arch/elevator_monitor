@@ -87,25 +87,69 @@ public class AlarmService {
     /**
      * 回写 elevator:status HSET 的 Alarm 字段并重新 PUBLISH，
      * 使前端通过正常的 status 消息即可看到告警灯变化。
+     *
+     * <p>修复 (2026-08-03):
+     * <ul>
+     *   <li>只保留 FIRED（触发）的规则；CLEARED（恢复）的规则必须从告警字段移除，
+     *       否则告警灯会一直残留不熄灭</li>
+     *   <li>保留非规则引擎产生的事件告警（如 LEVELING_TIMEOUT），避免被整体覆盖丢失</li>
+     * </ul>
      */
     private void updateStatusAlarm(String deviceId, List<AlarmEvent> events) {
         try {
-            StringBuilder sb = new StringBuilder();
+            // 1. 只收集本轮 FIRED 的规则
+            java.util.Set<String> firedRules = new java.util.LinkedHashSet<>();
             for (AlarmEvent ae : events) {
-                if (sb.length() > 0) sb.append(",");
-                sb.append(ae.getRuleName());
+                if (!AlarmEvent.TYPE_FIRED.equals(ae.getEventType())) {
+                    continue; // CLEARED 规则不写入，保证告警能正常熄灭
+                }
+                firedRules.add(ae.getRuleName());
             }
-            String alarmValue = sb.toString();
+
             Object raw = stringRedisTemplate.opsForHash().get("elevator:status", deviceId);
             if (raw != null) {
                 String json = raw.toString();
-                String updated = json.replaceFirst("\"Alarm\":\"[^\"]*\"", "\"Alarm\":\"" + alarmValue + "\"");
+                String currentAlarm = extractAlarmField(json);
+
+                // 2. 规则引擎已知的告警码集合，用于区分"事件告警"与"规则告警"
+                java.util.Set<String> ruleNames = new java.util.HashSet<>();
+                for (cn.edu.sztu.elevatormonitor.alarm.AlarmRule r : engine.getRules()) {
+                    ruleNames.add(r.ruleName());
+                }
+
+                // 3. 保留事件告警（非规则引擎产生的，如 LEVELING_TIMEOUT）
+                java.util.Set<String> eventAlarms = new java.util.LinkedHashSet<>();
+                if (!currentAlarm.isEmpty()) {
+                    for (String s : currentAlarm.split(",")) {
+                        String t = s.trim();
+                        if (t.isEmpty() || ruleNames.contains(t)) {
+                            continue; // 旧规则告警由本轮 firedRules 决定
+                        }
+                        eventAlarms.add(t);
+                    }
+                }
+
+                // 4. 合并事件告警 + 本轮 FIRED 规则告警
+                java.util.Set<String> merged = new java.util.LinkedHashSet<>(eventAlarms);
+                merged.addAll(firedRules);
+                String alarmValue = String.join(",", merged);
+
+                String updated = json.replaceFirst("\"Alarm\":\"[^\"]*\"",
+                        "\"Alarm\":\"" + alarmValue + "\"");
                 stringRedisTemplate.opsForHash().put("elevator:status", deviceId, updated);
                 stringRedisTemplate.convertAndSend("elevator:status", updated);
+                LOGGER.info("[Alarm] status Alarm 已更新: deviceId={}, alarm={}", deviceId, alarmValue);
             }
-            LOGGER.info("[Alarm] status Alarm 已更新: deviceId={}, alarm={}", deviceId, alarmValue);
         } catch (Exception e) {
             LOGGER.error("[Alarm] 更新 status Alarm 失败: deviceId={}", deviceId, e);
         }
+    }
+
+    /** 从 status JSON 中提取 Alarm 字段值（无该字段返回空串） */
+    private String extractAlarmField(String json) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"Alarm\":\"([^\"]*)\"")
+                .matcher(json);
+        return m.find() ? m.group(1) : "";
     }
 }

@@ -33,6 +33,15 @@ public class DoorOpenTooLongRule implements AlarmRule {
     @Override
     public AlarmEvent evaluate(ElevatorMessage msg, DeviceState state) {
         String door = msg.getDoorStatus();
+
+        // 困人场景下（平层+有乘客+门未开超时）, 门无法关闭是困人本身的表现,
+        // 已由 LEVELING_TIMEOUT（困人）告警覆盖, 不再重复触发"门超时"告警,
+        // 避免困人演示过程中误亮"开门运行"灯
+        String alarm = msg.getAlarm();
+        if (alarm != null && alarm.contains("LEVELING")) {
+            return null;
+        }
+
         if ("00".equals(door)) {
             // 关门到位 → 更新时间戳
             state.markDoorClosed();

@@ -531,7 +531,7 @@ TS_BASE="2020/11/10"
 ((totalCount++))
 section "告警 6/8 : 门超时未关 DOOR_OPEN_TOO_LONG (警告, 阈值 20s)"
 echo "  触发条件  : 电梯门持续开启超过 20 秒未关闭"
-echo "  前端显示  : alarm_05 (开门运行)"
+echo "  前端显示  : alarm_07 (其他告警, 不再占用 alarm_05 开门运行灯)"
 echo ""
 D6="demodot6"
 reset_device "$D6"
@@ -542,12 +542,14 @@ demo_pause 1 "短暂间隔"
 # ---- Alarm 7: LEVELING_TIMEOUT (30s) ----
 ((totalCount++))
 section "告警 7/8 : 平层超时 / 困人 ALARM_FIELD (警告, 阈值 30s)"
-echo "  触发条件  : 电梯平层开门状态持续超过 30 秒 (困人检测)"
+echo "  触发条件  : 电梯平层+有乘客+门未打开持续超过阈值 (困人检测)"
 echo "  前端显示  : alarm_00 (困人)"
+echo "  说明      : 门状态必须为关门到位(10)/开关门中(00), 不能用开门到位(04),"
+echo "              否则困人检测会被当作'门已打开'而重置, 困人灯不亮"
 echo ""
 D7="demoaf07"
 reset_device "$D7"
-send_frame "$D7" "$TS_BASE 09:10:00" "1" "04" "30" "05"
+send_frame "$D7" "$TS_BASE 09:10:00" "1" "10" "30" "05"
 info "计时器已启动: LEVELING_TIMEOUT -- 需等待 32s"
 demo_pause 1 "短暂间隔"
 
@@ -571,7 +573,7 @@ echo ""
 step "检查: 触发 DOOR_OPEN_TOO_LONG (已过 22s)"
 send_frame "$D6" "$TS_BASE 09:10:24" "1" "04" "30" "05"
 demo_pause 3 "等待告警评估"
-if assert_alarm "$D6" "DOOR_OPEN_TOO_LONG" "DOOR_OPEN_TOO_LONG" "alarm_05"; then ((passCount++)); else ((failCount++)); fi
+if assert_alarm "$D6" "DOOR_OPEN_TOO_LONG" "DOOR_OPEN_TOO_LONG" "alarm_07"; then ((passCount++)); else ((failCount++)); fi
 publish_to_0024002b "门超时未关" "DOOR_OPEN_TOO_LONG" "01" "0.00m/s" "01" "00" "00" "0.00米" "2次"
 
 # ---- Wait for LEVELING_TIMEOUT (total 32s) ----
@@ -580,7 +582,7 @@ sleep 10
 
 echo ""
 step "检查: 触发 LEVELING_TIMEOUT (已过 32s)"
-send_frame "$D7" "$TS_BASE 09:10:34" "1" "04" "30" "05"
+send_frame "$D7" "$TS_BASE 09:10:34" "1" "10" "30" "05"
 demo_pause 3 "等待告警评估"
 if assert_alarm "$D7" "ALARM_FIELD|LEVELING_TIMEOUT" "ALARM_FIELD / LEVELING" "alarm_00"; then ((passCount++)); else ((failCount++)); fi
 publish_to_0024002b "平层超时/困人" "LEVELING_TIMEOUT" "01" "0.00m/s" "01" "00" "01" "0.00米" "2次"
@@ -616,7 +618,7 @@ printf "  %s\n" "---------------------------------------------------------------
 report_names=("FLOOR_JUMP" "DOOR_OPEN_RUNNING" "DIRECTION_MISMATCH" "SPEED_ABNORMAL" "LOW_SPEED" "OVER_TOP (注入)" "DOOR_OPEN_TOO_LONG" "LEVELING_TIMEOUT" "LONG_IDLE")
 report_devs=("demofj01" "demodor2" "demodm03" "demosa04" "demols05" "demoovtop" "demodot6" "demoaf07" "demoli08")
 report_levels=("严重" "严重" "警告" "严重" "警告" "严重" "警告" "警告" "警告")
-report_fes=("alarm_04" "alarm_05" "alarm_07" "alarm_01" "alarm_02" "alarm_03" "alarm_05" "alarm_00" "alarm_07")
+report_fes=("alarm_04" "alarm_05" "alarm_07" "alarm_01" "alarm_02" "alarm_03" "alarm_07" "alarm_00" "alarm_07")
 report_conds=("楼层跳变超过2层" "电梯开门时运行(+alarm_06载人)" "方向与楼层变化矛盾" "超速超过 3.0 m/s" "速度低于 0.1 m/s" "冲顶(协议限制,Redis模拟)" "开门超过20秒" "平层开门超30秒(困人)" "非平层停滞超60秒")
 
 for i in "${!report_names[@]}"; do

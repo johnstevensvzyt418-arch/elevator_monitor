@@ -27,11 +27,55 @@ const (
 	wsReadDeadline = 45 * time.Second
 	// WebSocket 写超时
 	wsWriteTimeout = 3 * time.Second
+	// 每个客户端发送队列容量。慢客户端（后台标签页/高延迟）消息在此排队，
+	// 队列满时直接丢弃该条消息，绝不阻塞 Redis 订阅循环，保证其他客户端实时性。
+	wsSendQueueSize = 32
 )
+
+// wsClient 封装单个 WebSocket 连接。
+//
+// 设计要点（修复实时性延迟/跳变问题）:
+//  1. 所有写入（数据帧 + Ping）只由 writePump 这一个协程执行，
+//     避免原来"心跳协程 + 广播协程"并发写同一连接导致 Gorilla 报错、连接频繁断开。
+//  2. 每个连接独立缓冲队列 send；广播端只做非阻塞入队，
+//     慢客户端写不动时丢弃其消息，不再阻塞全局订阅循环。
+type wsClient struct {
+	conn *websocket.Conn
+	send chan []byte
+}
+
+// writePump 每个连接一个写协程：负责数据帧与心跳 Ping 的全部写入。
+// send 通道被关闭（客户端移除）时发送关闭帧并退出。
+func (c *wsClient) writePump() {
+	ticker := time.NewTicker(wsPingInterval)
+	defer func() {
+		ticker.Stop()
+		c.conn.Close()
+	}()
+	for {
+		select {
+		case data, ok := <-c.send:
+			if !ok {
+				_ = c.conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+				return
+			}
+			c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
+}
 
 type Cache struct {
 	mutex   sync.RWMutex
-	clients map[string]*websocket.Conn
+	clients map[string]*wsClient
 }
 
 type infopack struct {
@@ -50,46 +94,37 @@ type infopack struct {
 }
 
 func (p *Cache) Init() {
-	p.clients = make(map[string]*websocket.Conn, 10)
+	p.clients = make(map[string]*wsClient, 10)
 }
 
-// 向已连接的服务页面推送消息，写失败时自动清理死连接。
-// 使用读锁进行迭代（不阻塞其他消息推送），仅在清理死连接时短暂持有写锁。
+// SendMessage 向所有客户端广播。
+// 只做非阻塞入队（select + default），不执行任何网络写，
+// 因此慢客户端或写失败都不会阻塞 Redis 订阅循环，保证实时性。
 func (p *Cache) SendMessage(data string) (int, int) {
 	textData := []byte(data)
 	var succ int
 	var fail int
-	var deadKeys []string
 
-	// 读锁：允许多个 SendMessage 并发执行
+	// 读锁：允许并发广播，入队操作极快，不会长时间持锁
 	p.mutex.RLock()
-	for key, conn := range p.clients {
-		if conn == nil {
-			deadKeys = append(deadKeys, key)
+	for key, c := range p.clients {
+		if c == nil {
+			fail++
 			continue
 		}
-		conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-		if err := conn.WriteMessage(websocket.TextMessage, textData); err != nil {
-			fail++
-			deadKeys = append(deadKeys, key)
-			conn.Close()
-		} else {
+		select {
+		case c.send <- textData:
 			succ++
+		default:
+			// 该客户端消费慢（队列已满）：丢弃本条，避免拖垮全局
+			fail++
+			log.Printf("ws client %v 消费慢, 发送队列已满, 丢弃消息 (succ=%v fail=%v)", key, succ, fail)
 		}
 	}
 	p.mutex.RUnlock()
 
-	// 清理死连接：短暂持有写锁
-	if len(deadKeys) > 0 {
-		p.mutex.Lock()
-		for _, key := range deadKeys {
-			delete(p.clients, key)
-		}
-		p.mutex.Unlock()
-	}
-
 	if fail > 0 {
-		log.Printf("send message to ws client, succ: %v, fail: %v (已清理 %d 个死连接)", succ, fail, len(deadKeys))
+		log.Printf("send message to ws client, succ: %v, fail: %v", succ, fail)
 	} else {
 		log.Printf("send message to ws client, succ: %v", succ)
 	}
@@ -97,22 +132,26 @@ func (p *Cache) SendMessage(data string) (int, int) {
 	return succ, fail
 }
 
-func (p *Cache) AddClient(conn *websocket.Conn) {
+func (p *Cache) AddClient(c *wsClient) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	id := fmt.Sprintf("client_%p", conn)
-	p.clients[id] = conn
+	id := fmt.Sprintf("client_%p", c.conn)
+	p.clients[id] = c
 
 	log.Printf("add %v", id)
 }
 
-func (p *Cache) DeleteClient(conn *websocket.Conn) {
+func (p *Cache) DeleteClient(c *wsClient) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	id := fmt.Sprintf("client_%p", conn)
-	delete(p.clients, id)
+	id := fmt.Sprintf("client_%p", c.conn)
+	if _, ok := p.clients[id]; ok {
+		delete(p.clients, id)
+		// 关闭发送队列，通知 writePump 发送关闭帧并退出
+		close(c.send)
+	}
 	log.Printf("delete %v", id)
 }
 
@@ -144,10 +183,24 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
 	}
 	clientAddr := r.RemoteAddr
 	log.Printf("[WS] 新客户端连接: %s", clientAddr)
+
+	client := &wsClient{
+		conn: conn,
+		send: make(chan []byte, wsSendQueueSize),
+	}
 	if cache != nil {
-		cache.AddClient(conn)
+		cache.AddClient(client)
 		log.Printf("[WS] 当前在线客户端数: %d", len(cache.clients))
 	}
+	defer func() {
+		if cache != nil {
+			cache.DeleteClient(client)
+			log.Printf("[WS] 客户端断开: %s, 剩余在线: %d", clientAddr, len(cache.clients))
+		}
+	}()
+
+	// 独立写协程：数据帧与 Ping 都由它写，避免并发写同一连接
+	go client.writePump()
 
 	// 设置初始读超时
 	conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
@@ -158,27 +211,7 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// 启动心跳协程：每 wsPingInterval 发送 Ping，失败则关闭连接
-	pingDone := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(wsPingInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					log.Printf("[WS] Ping 失败，关闭连接: %v", err)
-					conn.Close()
-					return
-				}
-			case <-pingDone:
-				return
-			}
-		}
-	}()
-
-	// 读取循环：阻塞读，超时或错误则退出
+	// 读取循环：阻塞读，超时或错误则退出（defer 清理连接并关闭 writePump）
 	for {
 		_, _, err := conn.ReadMessage()
 		if err != nil {
@@ -187,17 +220,10 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
 			} else {
 				log.Printf("[WS] 连接关闭: %v (客户端: %s)", err, clientAddr)
 			}
-			break
+			return
 		}
 		// 收到客户端消息时重置读超时
 		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
-	}
-
-	close(pingDone)
-
-	if cache != nil {
-		cache.DeleteClient(conn)
-		log.Printf("[WS] 客户端断开: %s, 剩余在线: %d", clientAddr, len(cache.clients))
 	}
 }
 
