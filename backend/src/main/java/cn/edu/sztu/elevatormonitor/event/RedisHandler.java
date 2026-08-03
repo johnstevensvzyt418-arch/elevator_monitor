@@ -61,8 +61,10 @@ public class RedisHandler {
     /**
      * 监听电梯事件，同步双写到 Redis（HSET + Pub/Sub）。
      * {@code @Order(2)} 确保 AlarmHandler 先完成规则评估，本处理器再合并告警并发布。
+     * <p>使用独立 {@code redisExecutor} 线程池，与 HistoryHandler 的 DB 写入隔离，
+     * 避免 MySQL 写入慢导致状态实时发布排队延迟。</p>
      */
-    @Async
+    @Async("redisExecutor")
     @EventListener
     @Order(2)
     public void onElevatorEvent(ElevatorEvent event) {

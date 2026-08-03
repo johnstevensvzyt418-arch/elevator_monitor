@@ -58,6 +58,37 @@ public class AsyncConfig {
     }
 
     /**
+     * 实时状态发布专用线程池 — RedisHandler 使用。
+     *
+     * <p><b>为什么独立：</b>HistoryHandler（DB 写）与 RedisHandler（elevator:status
+     * 实时发布）原本共用默认 taskExecutor（core=4/max=8）。当 MySQL 写入慢或上报
+     * 频繁时，DB 写任务会占满线程，导致状态发布任务在队列中排队，前端显示延迟。
+     * 独立线程池保证电梯状态实时性不受历史写入影响。</p>
+     *
+     * <pre>
+     * corePoolSize  = 2      — 常驻线程（处理常规状态发布）
+     * maxPoolSize   = 4      — 峰值
+     * queueCapacity = 200    — 缓冲
+     * </pre>
+     */
+    @Bean("redisExecutor")
+    public ThreadPoolTaskExecutor redisExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(200);
+        executor.setKeepAliveSeconds(60);
+        executor.setThreadNamePrefix("redis-worker-");
+        // 队列满时由调用线程执行（背压），不丢状态
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        LOGGER.info("[Async] redisExecutor 初始化: core=2, max=4, queue=200, 独立于 DB 写入");
+        return executor;
+    }
+
+    /**
      * 告警专用线程池。
      *
      * <pre>
