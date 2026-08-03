@@ -42,6 +42,15 @@ public class DoorOpenTooLongRule implements AlarmRule {
             return null;
         }
 
+        // 停靠在楼层(方向00) + 门开门到位(01) + 无乘客(00) → 正常上下客开门，
+        // 如困人解除后开门让乘客离开，门保持打开一段时间属正常现象，
+        // 不触发"门超时"告警（有乘客的门开超时仍会告警，如 demo_alarms 的门超时场景）
+        if ("00".equals(msg.getDirection())
+                && "01".equals(door)
+                && "00".equals(msg.getPassenger())) {
+            return null;
+        }
+
         if ("00".equals(door)) {
             // 关门到位 → 更新时间戳
             state.markDoorClosed();

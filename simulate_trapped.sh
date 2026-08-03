@@ -44,6 +44,7 @@ SEG4="d00063000000220e"
 
 MOVE_MSGS=7
 TRAP_SECS=15
+OPEN_SECS=8
 PRECLEAR_MSGS=1
 MOVE_END_COUNT=$((PRECLEAR_MSGS + MOVE_MSGS))
 
@@ -128,9 +129,18 @@ while true; do
             HINT="🔴 困人持续+ 🤖AI异常 (已${TRAP_ELAPSED}s) | 门:开门中"
         fi
     else
-        CURRENT_SEG1="$SEG1_NONE"; CURRENT_SEG2="$SEG2_OPEN"; CURRENT_SEG3="$SEG3_2F_STOP"
-        PHASE="Open"
-        HINT="✅ 门打开+无内招 → 困人解除 乘客离开 | 门:开门到位"
+        # 困人解除阶段：先开门让乘客离开(约 OPEN_SECS 秒)，随后自动关门恢复常态。
+        # 若门一直保持打开，会超过 door-open 阈值(20s)触发"门超时"告警，
+        # 前端把它显示成"开门运行"灯，让解除阶段看起来不正常。
+        if [ $ELAPSED -lt $((MOVE_END_COUNT * INTERVAL_SEC + TRAP_SECS + OPEN_SECS)) ]; then
+            CURRENT_SEG1="$SEG1_NONE"; CURRENT_SEG2="$SEG2_OPEN"; CURRENT_SEG3="$SEG3_2F_STOP"
+            PHASE="Open"
+            HINT="✅ 门打开+无内招 → 困人解除 乘客离开 | 门:开门到位"
+        else
+            CURRENT_SEG1="$SEG1_NONE"; CURRENT_SEG2="$SEG2_CLOSED"; CURRENT_SEG3="$SEG3_2F_STOP"
+            PHASE="Idle"
+            HINT="🏠 关门到位 正常运行 | 门:关门到位"
+        fi
     fi
 
     RAW_DATA="F${NOW}/${DEVICE_ID}/${CURRENT_SEG1}${CURRENT_SEG2}${CURRENT_SEG3}${SEG4}"
