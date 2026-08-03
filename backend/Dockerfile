@@ -12,6 +12,7 @@ WORKDIR /build
 
 # 先复制 pom.xml，利用 Docker 缓存层加速构建
 COPY pom.xml .
+COPY settings.xml /root/.m2/settings.xml
 
 # 再复制源码，先运行本次部署的关键单元测试，再编译
 COPY src ./src
