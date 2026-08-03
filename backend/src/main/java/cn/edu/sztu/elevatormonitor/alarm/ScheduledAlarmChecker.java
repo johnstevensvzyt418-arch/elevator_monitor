@@ -144,8 +144,13 @@ public class ScheduledAlarmChecker {
 
                     // ---- 检查3: 门未关超时 ----
                     // 困人（平层+有乘客+门打不开超时）已触发时, 门无法关闭是困人的表现,
-                    // 由 LEVELING_TIMEOUT 覆盖, 不再重复触发"门超时", 避免演示误亮"开门运行"灯
-                    if (levelingAlarm == null && !"00".equals(door) && !door.isEmpty()) {
+                    // 由 LEVELING_TIMEOUT 覆盖, 不再重复触发"门超时"
+                    // 停靠(方向00)+门开门到位(01)+无乘客(00) = 正常上下客开门,
+                    // 如困人解除后开门让乘客离开，也不触发门超时
+                    boolean normalDoorOpen = "00".equals(direction)
+                            && "01".equals(door)
+                            && "00".equals(passenger);
+                    if (!normalDoorOpen && levelingAlarm == null && !"00".equals(door) && !door.isEmpty()) {
                         String lastClosedStr = (String) stringRedisTemplate.opsForHash()
                                 .get(timestampsKey, "lastDoorClosedTime");
                         if (lastClosedStr != null) {
