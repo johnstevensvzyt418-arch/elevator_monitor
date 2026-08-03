@@ -157,6 +157,10 @@
                         <span class="list-group-item-status" id="alarm_07_text">○</span>
                         <span class="list-group-item-text">检修状态</span>
                     </li>
+                    <li class="list-group-item font-thin" id="alarm_08">
+                        <span class="list-group-item-status" id="alarm_08_text">○</span>
+                        <span class="list-group-item-text">门超时未关</span>
+                    </li>
                     </ul>
                 </div>
             </section>
@@ -213,7 +217,7 @@
         // ========== 报警列表项缓存 ==========
         var alarmItems = {};
         var alarmTexts = {};
-        for (var i = 0; i < 8; i++) {
+        for (var i = 0; i < 9; i++) {
             var code = (i < 10 ? '0' : '') + i;
             alarmItems[code] = document.getElementById('alarm_' + code);
             alarmTexts[code] = document.getElementById('alarm_' + code + '_text');
@@ -417,8 +421,8 @@
                     // 开门载人运行：DOOR_OPEN_RUNNING + 有乘客
                     if (obj.Passenger === '01') setAlarmOn(6);
                 }
-                // 门超时未关 ≠ 开门运行, 不占用 alarm_05(开门运行) 灯, 归入其他告警(alarm_07)
-                if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(7);
+                // 门超时未关 ≠ 开门运行：独立 alarm_08(门超时未关) 灯，不再占用 alarm_05(开门运行)/alarm_07(检修)
+                if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(8);
                 if (alarmStr.indexOf('HARDWARE_FAULT') > -1) setAlarmOn(7);
                 if (alarmStr.indexOf('DIRECTION') > -1) setAlarmOn(7);
                 if (alarmStr.indexOf('LONG_IDLE') > -1 || alarmStr.indexOf('IDLE') > -1) setAlarmOn(7);
@@ -571,7 +575,7 @@
         });
 
         function resetAllAlarms() {
-            for (var i = 0; i < 8; i++) {
+            for (var i = 0; i < 9; i++) {
                 var code = (i < 10 ? '0' : '') + i;
                 var item = alarmItems[code];
                 var icon = alarmTexts[code];

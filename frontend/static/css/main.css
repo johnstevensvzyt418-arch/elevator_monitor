@@ -1312,6 +1312,11 @@ input:focus-visible {
     font-size: 20px;
 }
 
+/* 第 9 个灯位（门超时）独占一行，全宽显示 */
+.alarm-grid .list-group-item:nth-child(9) {
+    grid-column: 1 / -1;
+}
+
 .alarm-grid .list-group-item-text { padding-left: 6px; }
 .alarm-grid .list-group-item-alarm { color: #c43d32 !important; background: #fbeceb; }
 
