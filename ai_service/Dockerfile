@@ -8,14 +8,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖（libgomp1 是 PyTorch 运行时需要）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# 安装 Python 依赖
+# 当前生产评分后端是轻量协议基线，不需要安装 PyTorch。
+# legacy_lstm 仍由 infer_server.py 延迟加载，但需要使用者在自定义镜像中另行安装 torch。
 COPY requirements.txt .
-RUN pip install --no-cache-dir --no-deps --no-index --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu/ torch
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
 # 复制所有模型文件

@@ -10,18 +10,12 @@ from contextlib import asynccontextmanager
 
 import numpy as np
 import tomli
-import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 # ---- 确保 ai_service 目录在 sys.path 中，以便 import model 子包 ----
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from model.LSTM_AE import LSTM_AE
-from model.CNN_AE import CNN_AE
-from model.CNN_LSTM_AE import CNN_LSTM_AE
-from model.MLP_AE import MLP_AE
-from model.Transformer import TransformerAE
 from protocol_baseline import DISPLAY_THRESHOLD, ProtocolBaselineScorer
 
 # ============================================================
@@ -37,6 +31,7 @@ model_type = "LSTM_AE"
 scoring_backend = "legacy_lstm"
 feature_schema = "legacy-v1"
 baseline_scorer = None
+torch = None
 
 # ============================================================
 # 请求/响应模型
@@ -77,7 +72,7 @@ class HealthResponse(BaseModel):
 def load_model():
     """根据 config.toml 加载模型和评分参数。"""
     global model, device, mu, cov_matrix_inv, threshold, score_mode, model_type
-    global scoring_backend, feature_schema, baseline_scorer
+    global scoring_backend, feature_schema, baseline_scorer, torch
 
     config_path = os.path.join(os.path.dirname(__file__), "config.toml")
     with open(config_path, "rb") as f:
@@ -120,6 +115,20 @@ def load_model():
     if scoring_backend != "legacy_lstm":
         raise ValueError(f"Unknown scoring_backend: {scoring_backend}")
 
+    # PyTorch is intentionally optional for the production protocol baseline.
+    # Import the legacy stack only when that backend is explicitly selected.
+    try:
+        import torch as torch_module
+        from model.CNN_AE import CNN_AE
+        from model.CNN_LSTM_AE import CNN_LSTM_AE
+        from model.LSTM_AE import LSTM_AE
+        from model.MLP_AE import MLP_AE
+        from model.Transformer import TransformerAE
+    except ImportError as exc:
+        raise RuntimeError(
+            "legacy_lstm requires the optional PyTorch runtime"
+        ) from exc
+    torch = torch_module
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     # ---- 实例化模型 ----
