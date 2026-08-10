@@ -88,6 +88,15 @@ public class AlarmCooldownManager {
     }
 
     /**
+     * 清除冷却记录（规则恢复为正常时调用）。
+     * 使"恢复后短时间内再次故障"能立即重新触发告警，无需等待冷却期结束。
+     */
+    public void reset(String deviceId, String ruleName) {
+        lastFireTimes.remove(buildKey(deviceId, ruleName));
+        LOGGER.debug("[Cooldown] 冷却记录已清除: device={}, rule={}", deviceId, ruleName);
+    }
+
+    /**
      * 获取当前配置的冷却时间 (用于诊断/日志)。
      */
     public int getCooldownSeconds() {

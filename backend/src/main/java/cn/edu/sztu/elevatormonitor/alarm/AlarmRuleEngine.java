@@ -76,6 +76,9 @@ public class AlarmRuleEngine {
                     // 规则未触发 → 若之前处于激活状态，生成恢复事件
                     if (state.isAlarmActive(rule.ruleName())) {
                         state.deactivateAlarm(rule.ruleName());
+                        // 恢复时清除冷却记录：
+                        // 避免"恢复后短时间内再次故障"因冷却期(300s)无法立即重新告警、灯不亮
+                        cooldownManager.reset(msg.getDeviceId(), rule.ruleName());
                         AlarmEvent cleared = AlarmEvent.clear(
                                 msg.getDeviceId(), rule.ruleName(), rule.description());
                         events.add(cleared);
