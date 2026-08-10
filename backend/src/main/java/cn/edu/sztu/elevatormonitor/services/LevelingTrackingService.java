@@ -67,10 +67,10 @@ public class LevelingTrackingService {
      *
      * @param deviceId     设备ID
      * @param currentFloor 当前楼层（如 "01", "02"）
-     * @param targetFloor  目标楼层（如 "01", "无"）
+     * @param targetFloor  目标楼层（如 "01", "无"、组合"1、2"）
      * @param doorStatus   门状态: "00"=关门, "01"=开门到位
      * @param passenger    乘客状态: "01"=有乘客(内招), "00"=无乘客
-     * @param direction    运行方向: "00"=平层停靠, "01"=上行, "02"=下行
+     * @param direction    运行方向（保留兼容，不再作为平层硬性条件，避免到站方向未归零漏报）
      * @return 告警标识字符串，无告警返回 null
      */
     public String checkLevelingTimeout(String deviceId, String currentFloor,
@@ -81,11 +81,13 @@ public class LevelingTrackingService {
         }
 
         String hashKey = HASH_PREFIX + deviceId;
-        // 平层停靠判定: 必须方向为平层(00) 且 当前楼层==目标楼层。
-        // 增加 direction==00 检查: 电梯运行中(上行01/下行02)经过目标楼层时,
-        // currentFloor==targetFloor 也会成立, 若不加方向判断会误启动困人计时,
-        // 甚至当电梯在目标层减速停留超过阈值时误报困人。
-        boolean isLeveling = "00".equals(direction) && floorEquals(currentFloor, targetFloor);
+        // 平层判定: 当前楼层命中目标楼层(支持组合内召)。
+        // 注意: 不要求 direction==00 —— 真实设备到站/困人时方向字节可能未及时归零
+        // (仍报 01/02 运行方向) 或报故障方向(03)，若严格要求 direction==00 会漏报困人
+        // (电梯实际已停住但方向非 00)。
+        // 防"运行中误报"依赖楼层变化重置: 电梯运行中经过目标层时楼层会很快变化
+        // (cur≠target) → 触发无效帧 → 连续 2 帧后重置计时; 只有电梯真正停在目标层才计时。
+        boolean isLeveling = floorEquals(currentFloor, targetFloor);
         boolean hasPassenger = "01".equals(passenger);
         boolean isDoorOpen = "01".equals(doorStatus);
         boolean valid = isLeveling && hasPassenger && !isDoorOpen;
