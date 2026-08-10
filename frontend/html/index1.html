@@ -424,9 +424,9 @@
                 }
                 // 门超时未关 ≠ 开门运行：独立 alarm_08(门超时未关) 灯，不再占用 alarm_05(开门运行)/alarm_07(检修)
                 if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(8);
+                // 检修状态灯：仅由嵌入式上报的硬件故障报文(方向码03/0x80)触发，语义纯净；
+                // DIRECTION_MISMATCH / LONG_IDLE 是规则推断异常，不占用检修灯
                 if (alarmStr.indexOf('HARDWARE_FAULT') > -1) setAlarmOn(7);
-                if (alarmStr.indexOf('DIRECTION') > -1) setAlarmOn(7);
-                if (alarmStr.indexOf('LONG_IDLE') > -1 || alarmStr.indexOf('IDLE') > -1) setAlarmOn(7);
             }
 
             // 更新时间
