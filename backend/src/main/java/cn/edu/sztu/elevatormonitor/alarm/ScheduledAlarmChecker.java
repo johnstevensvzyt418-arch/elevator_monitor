@@ -135,7 +135,7 @@ public class ScheduledAlarmChecker {
 
                     // ---- 检查2: 困人检测（平层+有乘客+门打不开超时） ----
                     String levelingAlarm = levelingTrackingService.checkLevelingTimeout(
-                            deviceId, floor, targetFloor, door, passenger);
+                            deviceId, floor, targetFloor, door, passenger, direction);
                     if (levelingAlarm != null) {
                         LOGGER.warn("[巡检] 困人告警: deviceId={}, alarm={}", deviceId, levelingAlarm);
                         patrolAlarms.add(levelingAlarm);

@@ -386,7 +386,8 @@
                 // 字符串规则匹配（后端告警规则引擎命名）。
                 // 注意: 不能因为命中数字码就跳过字符串匹配,
                 // 否则 Alarm 含任意数字时会漏掉 LEVELING/DOOR_OPEN_RUNNING 等规则告警灯
-                if (alarmStr.indexOf('LEVELING') > -1 || alarmStr.indexOf('TIMEOUT') > -1) setAlarmOn(0);
+                // 困人告警精确匹配 LEVELING（不用宽泛 TIMEOUT，避免其他 *_TIMEOUT 告警误亮困人灯）
+                if (alarmStr.indexOf('LEVELING') > -1) setAlarmOn(0);
                 if (alarmStr.indexOf('ALARM_FIELD') > -1) setAlarmOn(0);
                 if (alarmStr.indexOf('LOW_SPEED') > -1) setAlarmOn(2);
                 else if (alarmStr.indexOf('SPEED_ABNORMAL') > -1) setAlarmOn(1);

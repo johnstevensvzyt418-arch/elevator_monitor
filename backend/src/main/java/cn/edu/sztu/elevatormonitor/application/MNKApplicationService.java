@@ -157,7 +157,8 @@ public class MNKApplicationService {
         if (alarm == null || alarm.isEmpty()) {
             try {
                 String levelingAlarm = levelingTrackingService.checkLevelingTimeout(
-                        deviceId, currentFloor, targetFloor, doorStatus, frame.getPassenger());
+                        deviceId, currentFloor, targetFloor, doorStatus, frame.getPassenger(),
+                        frame.getDirection());
                 if (levelingAlarm != null) {
                     alarm = levelingAlarm;
                 }

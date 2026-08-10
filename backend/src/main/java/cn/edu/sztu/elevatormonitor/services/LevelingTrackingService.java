@@ -65,17 +65,22 @@ public class LevelingTrackingService {
      * @param targetFloor  目标楼层（如 "01", "无"）
      * @param doorStatus   门状态: "00"=关门, "01"=开门到位
      * @param passenger    乘客状态: "01"=有乘客(内招), "00"=无乘客
+     * @param direction    运行方向: "00"=平层停靠, "01"=上行, "02"=下行
      * @return 告警标识字符串，无告警返回 null
      */
     public String checkLevelingTimeout(String deviceId, String currentFloor,
                                         String targetFloor, String doorStatus,
-                                        String passenger) {
+                                        String passenger, String direction) {
         if (deviceId == null || currentFloor == null || doorStatus == null) {
             return null;
         }
 
         String hashKey = HASH_PREFIX + deviceId;
-        boolean isLeveling = floorEquals(currentFloor, targetFloor);
+        // 平层停靠判定: 必须方向为平层(00) 且 当前楼层==目标楼层。
+        // 增加 direction==00 检查: 电梯运行中(上行01/下行02)经过目标楼层时,
+        // currentFloor==targetFloor 也会成立, 若不加方向判断会误启动困人计时,
+        // 甚至当电梯在目标层减速停留超过阈值时误报困人。
+        boolean isLeveling = "00".equals(direction) && floorEquals(currentFloor, targetFloor);
         boolean hasPassenger = "01".equals(passenger);
         boolean isDoorOpen = "01".equals(doorStatus);
 
