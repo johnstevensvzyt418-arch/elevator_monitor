@@ -203,6 +203,9 @@
                 }
                 lastUpdateTime.textContent = dateFtt('yyyy-MM-dd hh:mm:ss', new Date());
                 showToast('已连接到监控服务器', 'success');
+                // 刷新/重连后立即从 Redis 快照恢复设备状态，
+                // 避免设备停报(如困人后无新数据)时页面空白、困人告警灯不显示
+                loadDeviceSnapshots();
             };
 
             ws.onmessage = function(msg) {
@@ -478,6 +481,31 @@
             return null;
         }
 
+        // ========== 设备快照恢复 ==========
+        // 页面刷新/重连后从后端 Redis 快照恢复设备最新状态（含困人等告警），
+        // 使单设备页在设备停报时也能立即显示当前状态与告警灯。
+        function loadDeviceSnapshots() {
+            fetch('/api/devices', {
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json' }
+            })
+            .then(function(response) {
+                if (!response.ok) throw new Error('device snapshot request failed');
+                return response.json();
+            })
+            .then(function(payload) {
+                var items = Array.isArray(payload.items) ? payload.items : [];
+                for (var i = 0; i < items.length; i++) {
+                    var item = items[i];
+                    if (!item || !item.data) continue;
+                    // 单设备页：若指定了设备 ID，只恢复该设备
+                    if (targetDeviceId && targetDeviceId !== String(item.data.Device || '')) continue;
+                    handleMessage(item.data);
+                }
+            })
+            .catch(function() {});
+        }
+
         // ========== 清理 ==========
         window.addEventListener('beforeunload', function() {
             clearReconnectTimer();
@@ -489,6 +517,7 @@
 
         // ========== 启动 ==========
         lastUpdateTime.textContent = '正在连接...';
+        loadDeviceSnapshots();
         connectWebSocket();
         startStaleCheck();
 
