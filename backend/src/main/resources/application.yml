@@ -66,6 +66,12 @@ telemetry:
   dedup:
     ttl-seconds: 30
 
+ai:
+  rule-fusion:
+    enabled: true
+    threshold: 90
+    score-margin: 10
+
 alarm:
   long-idle:
     threshold-seconds: 60

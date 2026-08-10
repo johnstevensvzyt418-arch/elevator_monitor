@@ -1,5 +1,6 @@
 package cn.edu.sztu.elevatormonitor.event;
 
+import cn.edu.sztu.elevatormonitor.ai.AiRuleFusionService;
 import cn.edu.sztu.elevatormonitor.domain.event.ElevatorEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,9 +45,12 @@ public class RedisHandler {
     private static final String HASH_TIMESTAMPS_PREFIX = "elevator:timestamps:";
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final AiRuleFusionService aiRuleFusionService;
 
-    public RedisHandler(StringRedisTemplate stringRedisTemplate) {
+    public RedisHandler(StringRedisTemplate stringRedisTemplate,
+                        AiRuleFusionService aiRuleFusionService) {
         this.stringRedisTemplate = stringRedisTemplate;
+        this.aiRuleFusionService = aiRuleFusionService;
     }
 
     /**
@@ -71,8 +75,9 @@ public class RedisHandler {
         LOGGER.info("[RedisHandler] 收到事件: eventId={}, deviceId={}", 
                 event.getEventId(), event.getDeviceId());
         try {
-            String json = buildJsonPayload(event);
             String deviceId = event.getDeviceId();
+            String mergedAlarm = mergeAlarms(deviceId, nvl(event.getAlarm()));
+            String json = buildJsonPayload(event, mergedAlarm);
 
             // 1. HSET — 持久化最新状态，支持按 deviceId 查询
             stringRedisTemplate.opsForHash().put(HASH_KEY_ELEVATOR_STATUS, deviceId, json);
@@ -86,6 +91,9 @@ public class RedisHandler {
             // 2. PUBLISH — 实时推送给 Go WebSocket 订阅者
             stringRedisTemplate.convertAndSend(CHANNEL_ELEVATOR_STATUS, json);
             LOGGER.debug("[RedisHandler] PUBLISH elevator:status => OK, deviceId={}", deviceId);
+
+            // Use the same canonical Alarm value displayed in the device list.
+            aiRuleFusionService.updateAlarmState(deviceId, mergedAlarm);
         } catch (Exception e) {
             LOGGER.error("[RedisHandler] Redis 写入异常: eventId={}, deviceId={}",
                     event.getEventId(), event.getDeviceId(), e);
@@ -95,7 +103,7 @@ public class RedisHandler {
     /**
      * 构造 JSON 负载 — 与 Go 端 infopack 结构体保持一致。
      */
-    private String buildJsonPayload(ElevatorEvent e) {
+    private String buildJsonPayload(ElevatorEvent e, String mergedAlarm) {
         DecimalFormat df = new DecimalFormat("0.00");
         Map<String, String> payload = new LinkedHashMap<>();
         payload.put("Device",    nvl(e.getDeviceId()));
@@ -106,7 +114,7 @@ public class RedisHandler {
         payload.put("Door",      nvl(e.getDoorStatus()));
         payload.put("Passenger", nvl(e.getPassenger()));
         payload.put("Speed",     formatSpeed(e.getSpeed()));
-        payload.put("Alarm",     mergeAlarms(e.getDeviceId(), nvl(e.getAlarm())));
+        payload.put("Alarm",     mergedAlarm);
         payload.put("Runtime",   nvl(e.getRuntime()));
         payload.put("Distance",  formatDistance(e.getDistance()));
         payload.put("Times",     formatTimes(e.getTimes()));

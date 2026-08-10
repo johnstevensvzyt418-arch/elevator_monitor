@@ -40,13 +40,16 @@ public class AiAlarmListener {
     private final TimeSeriesBuffer timeSeriesBuffer;
     private final AiPredictClient aiPredictClient;
     private final StringRedisTemplate redis;
+    private final AiRuleFusionService ruleFusionService;
 
     public AiAlarmListener(TimeSeriesBuffer timeSeriesBuffer,
                            AiPredictClient aiPredictClient,
-                           StringRedisTemplate redis) {
+                           StringRedisTemplate redis,
+                           AiRuleFusionService ruleFusionService) {
         this.timeSeriesBuffer = timeSeriesBuffer;
         this.aiPredictClient = aiPredictClient;
         this.redis = redis;
+        this.ruleFusionService = ruleFusionService;
     }
 
     @PostConstruct
@@ -60,6 +63,11 @@ public class AiAlarmListener {
     public void onElevatorEvent(ElevatorEvent event) {
         try {
             String deviceId = event.getDeviceId();
+            if (ruleFusionService.isActive(deviceId)) {
+                LOGGER.debug("[AI-Listener] model collection paused by rule fusion deviceId={}",
+                        deviceId);
+                return;
+            }
             double[] features = extractBaseFeatures(event);
             Long deviceSampleTime = resolveDeviceSampleTime(event);
             boolean windowReset = timeSeriesBuffer.appendContinuousWithInterval(

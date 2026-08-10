@@ -94,6 +94,17 @@ class TimeSeriesBufferTest {
                 "ai:series:mnk-v2:device-1", "[3.0,1.0,1.0,0.0,1.0]");
     }
 
+    @Test
+    void clearRemovesSamplesAndTimestampAnchorTogether() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+
+        new TimeSeriesBuffer(redis).clear("device-1");
+
+        verify(redis).delete(Arrays.asList(
+                "ai:series:mnk-v2:device-1",
+                "ai:last-sample:mnk-v2:device-1"));
+    }
+
     @SuppressWarnings("unchecked")
     private StringRedisTemplate mockRedisWithPreviousSample(
             long size, String previousTime, String previousJson) {
