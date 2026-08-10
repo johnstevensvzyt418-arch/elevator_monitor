@@ -418,9 +418,9 @@
                 if (alarmStr.indexOf('OVER_TOP') > -1) setAlarmOn(3);
                 if (alarmStr.indexOf('FLOOR_JUMP') > -1) setAlarmOn(4);
                 if (alarmStr.indexOf('DOOR_OPEN_RUNNING') > -1) {
-                    setAlarmOn(5);
-                    // 开门载人运行：DOOR_OPEN_RUNNING + 有乘客
+                    // 开门载人运行 vs 开门运行 互斥：有乘客只亮灯6(开门载人运行)，无乘客只亮灯5(开门运行)
                     if (obj.Passenger === '01') setAlarmOn(6);
+                    else setAlarmOn(5);
                 }
                 // 门超时未关 ≠ 开门运行：独立 alarm_08(门超时未关) 灯，不再占用 alarm_05(开门运行)/alarm_07(检修)
                 if (alarmStr.indexOf('DOOR_OPEN_TOO_LONG') > -1) setAlarmOn(8);
