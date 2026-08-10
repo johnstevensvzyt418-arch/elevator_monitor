@@ -26,7 +26,9 @@ public class AlarmFieldRule implements AlarmRule {
     @Override
     public AlarmEvent evaluate(ElevatorMessage msg, DeviceState state) {
         String alarm = msg.getAlarm();
-        if (alarm != null && !"正常".equals(alarm) && !"".equals(alarm)) {
+        // 困人告警(LEVELING_TIMEOUT)由专门机制处理，不重复归为“报警字段异常”
+        if (alarm != null && !"正常".equals(alarm) && !"".equals(alarm)
+                && !alarm.contains("LEVELING")) {
             return AlarmEvent.fire(msg.getDeviceId(), ruleName(), level(), description(),
                     "报警内容: " + alarm + ", 当前楼层=" + msg.getCurrentFloor(),
                     msg.getCurrentFloor(), msg.getSpeed());

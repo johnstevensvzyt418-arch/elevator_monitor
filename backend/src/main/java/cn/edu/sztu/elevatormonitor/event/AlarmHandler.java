@@ -81,13 +81,12 @@ public class AlarmHandler {
                 persistAlarmAsync(alarm);
                 pushAlarm(alarm);
             }
-            // 将触发的告警写入标记 key，供 RedisHandler 合并到 status JSON
-            // 无告警时清除标记，确保旧告警不会残留
-            if (!alarmEvents.isEmpty()) {
-                updateAlarmMarker(event.getDeviceId(), alarmEvents);
-            } else {
-                clearAlarmMarker(event.getDeviceId());
-            }
+            // 写入“当前激活规则集”而非本轮事件列表：
+            // 冷却期(300s)内持续故障时，evaluate 会因冷却拦截返回空事件列表，
+            // 若按“空则清除标记”逻辑会把已激活告警的标记清空，导致告警灯熄灭。
+            // 基于激活集写入可保证持续故障时告警灯保持点亮，规则恢复后自动移除。
+            java.util.Set<String> activeAlarms = alarmRuleEngine.getActiveAlarms(event.getDeviceId());
+            updateAlarmMarker(event.getDeviceId(), activeAlarms);
         } catch (Exception e) {
             LOGGER.error("[AlarmHandler] 处理异常: eventId={}, deviceId={}",
                     event.getEventId(), event.getDeviceId(), e);
@@ -144,37 +143,16 @@ public class AlarmHandler {
     }
 
     /**
-     * 将规则引擎告警写入独立的 marker key，供 RedisHandler 合并。
-     * 不再直接修改 status HSET 或重新 PUBLISH，消除竞态闪烁。
+     * 将设备当前激活的规则告警集合写入独立的 marker key，供 RedisHandler 合并。
+     * 覆盖式写入：集合中已恢复的规则自然不在其中，实现告警自动消除。
      */
-    private void updateAlarmMarker(String deviceId, List<AlarmEvent> alarmEvents) {
+    private void updateAlarmMarker(String deviceId, java.util.Set<String> activeAlarms) {
         try {
-            StringBuilder sb = new StringBuilder();
-            for (AlarmEvent ae : alarmEvents) {
-                if (!AlarmEvent.TYPE_FIRED.equals(ae.getEventType())) {
-                    continue;
-                }
-                if (sb.length() > 0) sb.append(",");
-                sb.append(ae.getRuleName());
-            }
-            String alarmValue = sb.toString();
+            String alarmValue = String.join(",", activeAlarms);
             stringRedisTemplate.opsForHash().put("elevator:status", deviceId + MARKER_RULE_ALARM, alarmValue);
             LOGGER.info("[AlarmHandler] 规则告警标记已写入: deviceId={}, alarm={}", deviceId, alarmValue);
         } catch (Exception e) {
             LOGGER.error("[AlarmHandler] 告警标记写入失败: deviceId={}", deviceId, e);
-        }
-    }
-
-    /**
-     * 清除告警标记 — 当所有规则均未触发时调用，
-     * 确保条件解除后告警立即消失，不会残留在 marker key 中。
-     */
-    private void clearAlarmMarker(String deviceId) {
-        try {
-            stringRedisTemplate.opsForHash().put("elevator:status", deviceId + MARKER_RULE_ALARM, "");
-            LOGGER.debug("[AlarmHandler] 告警标记已清除: deviceId={}", deviceId);
-        } catch (Exception e) {
-            LOGGER.error("[AlarmHandler] 告警标记清除失败: deviceId={}", deviceId, e);
         }
     }
 }

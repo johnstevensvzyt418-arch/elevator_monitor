@@ -93,6 +93,16 @@ public class AlarmRuleEngine {
         return events;
     }
 
+    /**
+     * 获取设备当前处于激活状态的规则告警集合。
+     * <p>用于告警标记持久化：即使规则处于冷却期内（持续故障时 evaluate 因冷却跳过
+     * 产生空事件列表），已激活的告警仍应保持点亮，避免告警灯闪烁/熄灭。</p>
+     */
+    public java.util.Set<String> getActiveAlarms(String deviceId) {
+        DeviceState state = stateStore.get(deviceId);
+        return state != null ? state.getActiveAlarms() : java.util.Collections.emptySet();
+    }
+
     public List<AlarmRule> getRules() {
         return rules;
     }
