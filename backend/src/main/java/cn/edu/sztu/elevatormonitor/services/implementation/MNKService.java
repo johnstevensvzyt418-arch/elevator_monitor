@@ -186,7 +186,8 @@ public class MNKService implements ElevatorService {
                     elevatorMessage.getCurrentFloor(),
                     elevatorMessage.getTargetFloor(),
                     elevatorMessage.getDoorStatus(),
-                    elevatorMessage.getPassenger());
+                    elevatorMessage.getPassenger(),
+                    elevatorMessage.getDirection());
             if (levelingAlarm != null) {
                 elevatorMessage.setAlarm(levelingAlarm);
                 LOGGER.warn("[MNK] 困人告警: deviceId={}, alarm={}",

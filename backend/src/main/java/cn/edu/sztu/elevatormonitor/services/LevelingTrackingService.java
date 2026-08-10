@@ -19,18 +19,20 @@ import java.util.Map;
  *
  * <h3>触发逻辑</h3>
  * <ol>
- *   <li>当前楼层==目标楼层（平层）且 有乘客(内招=01) 且 门未打开(≠01) → 判定为困人风险</li>
- *   <li>开始计时，若该状态持续超过阈值秒数 → 返回告警标识 "LEVELING_TIMEOUT"</li>
- *   <li>告警触发后<b>保持返回告警</b>，直到门打开或楼层变化或乘客离开才清除</li>
- *   <li>门打开(01) 或 楼层≠目标 或 乘客离开 → 完全重置（含告警状态）</li>
+ *   <li>平层停靠(方向00且当前楼层命中目标楼层) 且 有乘客 且 门未打开(≠01) → 判定为困人风险</li>
+ *   <li>累计有效时长超过阈值秒数 → 返回告警标识 "LEVELING_TIMEOUT"（抖动帧暂停累加不清零）</li>
+ *   <li>告警触发后<b>保持返回告警</b>，连续 {@link #BAD_FRAME_THRESHOLD} 帧条件解除才清除（容忍单帧毛刺）</li>
+ *   <li>楼层匹配支持组合内召（如 "1、2"），当前楼层命中任一层即视为平层</li>
  * </ol>
  *
  * <h3>Redis 数据结构</h3>
  * <pre>
  *   HSET elevator:leveling:{deviceId}
- *     recorded  → "1" / "0"
- *     startSec  → epoch秒数
- *     fired     → "1" / "0"  （告警是否已触发，用于持久化）
+ *     recorded  → "1" / "0"            是否进入困人风险流程
+ *     accSec    → 累计有效时长(秒)     抖动帧暂停累加，不清零
+ *     lastValid → 最近一次有效帧 epoch（"-1"=暂停累加中）
+ *     badCount  → 连续异常帧计数        达到 BAD_FRAME_THRESHOLD 才重置
+ *     fired     → "1" / "0"           告警是否已触发，用于持久化
  * </pre>
  *
  * @author bugfix
@@ -47,6 +49,9 @@ public class LevelingTrackingService {
 
     /** Redis Hash 键名前缀 */
     private static final String HASH_PREFIX = "elevator:leveling:";
+
+    /** 连续异常帧达到该值才完全重置（抖动容忍），单帧毛刺只暂停累加、不清零 */
+    private static final int BAD_FRAME_THRESHOLD = 2;
 
     /** 告警代码 */
     public static final String ALARM_LEVELING_TIMEOUT = "LEVELING_TIMEOUT";
@@ -83,70 +88,124 @@ public class LevelingTrackingService {
         boolean isLeveling = "00".equals(direction) && floorEquals(currentFloor, targetFloor);
         boolean hasPassenger = "01".equals(passenger);
         boolean isDoorOpen = "01".equals(doorStatus);
+        boolean valid = isLeveling && hasPassenger && !isDoorOpen;
 
-        // 条件不满足 → 完全重置（含告警标记）
-        // 困人解除: 门打开了 / 楼层变化 / 乘客离开
-        if (!isLeveling || !hasPassenger || isDoorOpen) {
-            // 诊断日志：记录具体是哪个条件不满足，便于排查困人告警未触发的原因
-            LOGGER.info("[Leveling] 设备 {} 困人条件不满足 — 平层={}, 有乘客={}, 门开={} | "
-                    + "cur={}, target={}, door={}, passenger={}",
-                    deviceId, isLeveling, hasPassenger, isDoorOpen,
-                    currentFloor, targetFloor, doorStatus, passenger);
-            resetAll(hashKey);
-            return null;
-        }
-
-        // 平层 + 有乘客 + 门未开 → 检查/启动计时
         Map<Object, Object> state = stringRedisTemplate.opsForHash().entries(hashKey);
-        String recorded = state != null ? (String) state.get("recorded") : null;
-        String startSecStr = state != null ? (String) state.get("startSec") : null;
         String fired = state != null ? (String) state.get("fired") : null;
-
         long nowSec = Instant.now().getEpochSecond();
 
-        // 告警已触发且条件未解除 → 持续返回告警，保持前端指示灯常亮
+        // ============ 告警已触发：保持返回告警，连续 BAD_FRAME_THRESHOLD 帧条件解除才清除 ============
+        // 单帧毛刺（door=01 抖动 / passenger=00 抖动 / direction 抖动）不会让告警闪烁消失。
         if ("1".equals(fired)) {
-            LOGGER.debug("[Leveling] 设备 {} 困人告警持续中, floor={}", deviceId, currentFloor);
-            return ALARM_LEVELING_TIMEOUT;
+            if (valid) {
+                // 恢复有效，清零异常计数，继续保持告警
+                stringRedisTemplate.opsForHash().put(hashKey, "badCount", "0");
+                return ALARM_LEVELING_TIMEOUT;
+            }
+            int bad = incrBadCount(hashKey, state);
+            LOGGER.info("[Leveling] 设备 {} 困人告警持续中(异常帧{}/{}), floor={}",
+                    deviceId, bad, BAD_FRAME_THRESHOLD, currentFloor);
+            if (bad >= BAD_FRAME_THRESHOLD) {
+                resetAll(hashKey);
+                return null;
+            }
+            return ALARM_LEVELING_TIMEOUT; // 抖动帧仍保持告警
         }
 
-        if (!"1".equals(recorded) || startSecStr == null) {
-            // 首次进入困人风险状态 → 开始计时
-            stringRedisTemplate.opsForHash().put(hashKey, "recorded", "1");
-            stringRedisTemplate.opsForHash().put(hashKey, "startSec", String.valueOf(nowSec));
-            stringRedisTemplate.opsForHash().put(hashKey, "fired", "0");
-            LOGGER.info("[Leveling] 设备 {} 平层有乘客门未开, 开始计时 (阈值={}s), floor={}",
-                    deviceId, timeoutSeconds, currentFloor);
+        // ============ 条件不满足：连续 BAD_FRAME_THRESHOLD 帧才完全重置 ============
+        // 容忍单帧瞬态异常（传感器毛刺/协议抖动），避免计时被反复清零永远达不到阈值。
+        if (!valid) {
+            int bad = incrBadCount(hashKey, state);
+            if (bad == 1) {
+                // 第一帧异常：暂停累计（暂停期不计入），但不清零
+                stringRedisTemplate.opsForHash().put(hashKey, "lastValid", "-1");
+                LOGGER.info("[Leveling] 设备 {} 困人条件异常(第1帧, 暂不清零) — 平层={}, 有乘客={}, 门开={} | "
+                        + "cur={}, target={}, door={}, passenger={}",
+                        deviceId, isLeveling, hasPassenger, isDoorOpen,
+                        currentFloor, targetFloor, doorStatus, passenger);
+            }
+            if (bad >= BAD_FRAME_THRESHOLD) {
+                resetAll(hashKey);
+            }
             return null;
         }
 
-        // 已记录 → 检查是否超时
-        long startSec;
+        // ============ 有效帧：累计有效时长（抖动帧暂停累加，不清零） ============
+        stringRedisTemplate.opsForHash().put(hashKey, "badCount", "0");
+        String recorded = state != null ? (String) state.get("recorded") : null;
+        String accSecStr = state != null ? (String) state.get("accSec") : null;
+        String lastValidStr = state != null ? (String) state.get("lastValid") : null;
+        boolean paused = "-1".equals(lastValidStr);
+
+        if (!"1".equals(recorded) || lastValidStr == null || paused) {
+            // 首次进入 或 从暂停恢复：重设计时起点，不把暂停期计入
+            stringRedisTemplate.opsForHash().put(hashKey, "recorded", "1");
+            if (lastValidStr == null || !"1".equals(recorded)) {
+                stringRedisTemplate.opsForHash().put(hashKey, "accSec", "0");
+                LOGGER.info("[Leveling] 设备 {} 平层有乘客门未开, 开始计时 (阈值={}s), floor={}",
+                        deviceId, timeoutSeconds, currentFloor);
+            } else {
+                LOGGER.info("[Leveling] 设备 {} 暂停后恢复计时(不累计暂停期), 累计{}s, floor={}",
+                        deviceId, accSecStr == null ? 0 : accSecStr, currentFloor);
+            }
+            stringRedisTemplate.opsForHash().put(hashKey, "lastValid", String.valueOf(nowSec));
+            return null;
+        }
+
+        long lastValidSec;
         try {
-            startSec = Long.parseLong(startSecStr);
+            lastValidSec = Long.parseLong(lastValidStr);
         } catch (NumberFormatException e) {
             resetAll(hashKey);
             return null;
         }
 
-        long elapsed = nowSec - startSec;
-        if (elapsed >= timeoutSeconds) {
-            LOGGER.warn("[Leveling] 设备 {} 困人告警触发! 平层有乘客门未开已持续{}s > 阈值{}s, floor={}",
-                    deviceId, elapsed, timeoutSeconds, currentFloor);
-            // 标记告警已触发但不重置计时器，后续调用持续返回告警直到条件解除
+        long accSec = 0;
+        try {
+            accSec = Long.parseLong(accSecStr);
+        } catch (NumberFormatException e) {
+            accSec = 0;
+        }
+        // 有效帧间距累加到累计时长
+        long delta = nowSec - lastValidSec;
+        if (delta > 0) {
+            accSec += delta;
+            stringRedisTemplate.opsForHash().put(hashKey, "accSec", String.valueOf(accSec));
+        }
+        stringRedisTemplate.opsForHash().put(hashKey, "lastValid", String.valueOf(nowSec));
+
+        if (accSec >= timeoutSeconds) {
+            LOGGER.warn("[Leveling] 设备 {} 困人告警触发! 累计有效时长{}s >= 阈值{}s, floor={}",
+                    deviceId, accSec, timeoutSeconds, currentFloor);
+            // 标记告警已触发，后续调用持续返回告警直到条件解除
             stringRedisTemplate.opsForHash().put(hashKey, "fired", "1");
             return ALARM_LEVELING_TIMEOUT;
         }
 
-        LOGGER.debug("[Leveling] 设备 {} 困人风险计时中, 已持续{}s/{}s, floor={}",
-                deviceId, elapsed, timeoutSeconds, currentFloor);
+        LOGGER.debug("[Leveling] 设备 {} 困人风险计时中, 累计{}s/{}s, floor={}",
+                deviceId, accSec, timeoutSeconds, currentFloor);
         return null;
+    }
+
+    /**
+     * 楼层匹配：targetFloor 可能是组合内召（如 "1、2"、"1、2、3"），
+     * 按顿号拆分后，当前楼层命中任意一个即视为平层，避免组合内召时漏判困人。
+     */
+    private boolean floorEquals(String currentFloor, String targetFloor) {
+        if (currentFloor == null || targetFloor == null) return false;
+        String[] parts = targetFloor.split("、");
+        for (String part : parts) {
+            if (floorEqualsSingle(currentFloor, part.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
      * 数值化比较两个楼层值，兼容 "01" 与 "1" 等前导零差异。
      */
-    private boolean floorEquals(String f1, String f2) {
+    private boolean floorEqualsSingle(String f1, String f2) {
         if (f1 == null || f2 == null) return false;
         try {
             return Integer.parseInt(f1) == Integer.parseInt(f2);
@@ -156,9 +215,25 @@ public class LevelingTrackingService {
         }
     }
 
+    /** 自增连续异常帧计数，返回当前值 */
+    private int incrBadCount(String hashKey, Map<Object, Object> state) {
+        String badStr = state != null ? (String) state.get("badCount") : null;
+        int bad = 0;
+        try {
+            if (badStr != null) bad = Integer.parseInt(badStr);
+        } catch (NumberFormatException e) {
+            bad = 0;
+        }
+        bad++;
+        stringRedisTemplate.opsForHash().put(hashKey, "badCount", String.valueOf(bad));
+        return bad;
+    }
+
     private void resetAll(String hashKey) {
         stringRedisTemplate.opsForHash().put(hashKey, "recorded", "0");
-        stringRedisTemplate.opsForHash().put(hashKey, "startSec", "0");
+        stringRedisTemplate.opsForHash().put(hashKey, "accSec", "0");
+        stringRedisTemplate.opsForHash().put(hashKey, "lastValid", "0");
+        stringRedisTemplate.opsForHash().put(hashKey, "badCount", "0");
         stringRedisTemplate.opsForHash().put(hashKey, "fired", "0");
     }
 }
