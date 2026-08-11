@@ -42,12 +42,24 @@ public class ElevatorMessageRepository {
             // 1. HSET — 持久化最新状态，支持按 deviceId 查询
             stringRedisTemplate.opsForHash().put("elevator:status", deviceId, json);
 
-            // 1b. 更新最后消息时间戳，供 ScheduledAlarmChecker 巡检设备离线
-            //     （V1 协议路径必需：否则离线检测读不到 lastMessageTime）
+            // 1b. 更新时间戳，供 ScheduledAlarmChecker 巡检（离线/门超时/闲置）
+            //     （V1 协议路径必需：否则离线/门超时/闲置检测读不到基准时间戳）
             try {
-                stringRedisTemplate.opsForHash().put(
-                        "elevator:timestamps:" + deviceId, "lastMessageTime",
-                        String.valueOf(java.time.Instant.now().getEpochSecond()));
+                String tsKey = "elevator:timestamps:" + deviceId;
+                long nowSec = java.time.Instant.now().getEpochSecond();
+                stringRedisTemplate.opsForHash().put(tsKey, "lastMessageTime", String.valueOf(nowSec));
+                // 关门到位(00) → 更新门关闭基准时间（巡检门超时检测依赖）
+                if ("00".equals(elevatorMessage.getDoorStatus())) {
+                    stringRedisTemplate.opsForHash().put(tsKey, "lastDoorClosedTime", String.valueOf(nowSec));
+                }
+                // 楼层变化 → 更新移动基准时间与当前楼层（巡检闲置检测依赖）
+                Object lastFloorObj = stringRedisTemplate.opsForHash().get(tsKey, "lastFloor");
+                String lastFloor = (lastFloorObj != null) ? lastFloorObj.toString() : null;
+                if (lastFloor == null || !lastFloor.equals(elevatorMessage.getCurrentFloor())) {
+                    stringRedisTemplate.opsForHash().put(tsKey, "lastMoveTime", String.valueOf(nowSec));
+                    stringRedisTemplate.opsForHash().put(tsKey, "lastFloor",
+                            elevatorMessage.getCurrentFloor() != null ? elevatorMessage.getCurrentFloor() : "");
+                }
             } catch (Exception tsEx) {
                 LOGGER.debug("[Redis] 时间戳更新失败(Redis不可用?): {}", tsEx.getMessage());
             }

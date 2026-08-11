@@ -198,11 +198,28 @@ public class MNKApplicationService {
                 .rawData(rawData)
                 .build();
 
-        // ---- 4.5 直接更新最后消息时间戳（不依赖事件总线，确保离线检测可靠） ----
+        // ---- 4.5 直接更新时间戳（不依赖事件总线，确保离线/门超时/闲置检测可靠） ----
+        // ScheduledAlarmChecker 巡检依赖 elevator:timestamps:{id} 的
+        //   lastMessageTime   → 离线检测
+        //   lastDoorClosedTime→ 门未关超时检测（door=00 关门到位时更新）
+        //   lastMoveTime/lastFloor → 长时间闲置检测（楼层变化时更新）
+        // 原实现仅更新 lastMessageTime，导致设备停报且门处于开门状态时，
+        // 巡检兜底的门超时/闲置检测因基准时间戳缺失而失效。此处同步维护。
         try {
-            stringRedisTemplate.opsForHash().put(
-                    "elevator:timestamps:" + deviceId, "lastMessageTime",
-                    String.valueOf(java.time.Instant.now().getEpochSecond()));
+            String tsKey = "elevator:timestamps:" + deviceId;
+            long nowSec = java.time.Instant.now().getEpochSecond();
+            stringRedisTemplate.opsForHash().put(tsKey, "lastMessageTime", String.valueOf(nowSec));
+            // 关门到位(00) → 更新门关闭基准时间（巡检门超时检测依赖）
+            if ("00".equals(doorStatus)) {
+                stringRedisTemplate.opsForHash().put(tsKey, "lastDoorClosedTime", String.valueOf(nowSec));
+            }
+            // 楼层变化 → 更新移动基准时间与当前楼层（巡检闲置检测依赖）
+            Object lastFloorObj = stringRedisTemplate.opsForHash().get(tsKey, "lastFloor");
+            String lastFloor = (lastFloorObj != null) ? lastFloorObj.toString() : null;
+            if (lastFloor == null || !lastFloor.equals(currentFloor)) {
+                stringRedisTemplate.opsForHash().put(tsKey, "lastMoveTime", String.valueOf(nowSec));
+                stringRedisTemplate.opsForHash().put(tsKey, "lastFloor", currentFloor != null ? currentFloor : "");
+            }
         } catch (Exception tsEx) {
             LOGGER.warn("[MNK-App] 时间戳更新失败(Redis不可用?), deviceId={}", deviceId);
         }
