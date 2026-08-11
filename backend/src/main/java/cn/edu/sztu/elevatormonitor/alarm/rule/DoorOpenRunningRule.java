@@ -76,14 +76,30 @@ public class DoorOpenRunningRule implements AlarmRule {
     }
 
     /**
-     * 数值化比较两个楼层值，兼容 "01" 与 "1"、"02" 与 "2" 等前导零差异。
-     * 与 LevelingTrackingService.floorEquals 逻辑一致。
+     * 楼层匹配：targetFloor 可能是组合内召（如 "2、3"、"1、2、3"），
+     * 按顿号拆分后，当前楼层命中任意一个即视为平层（停在目标层开门属正常操作，
+     * 不应触发开门运行告警）。与 LevelingTrackingService.floorEquals 逻辑保持一致。
      */
     private boolean floorsEqual(String f1, String f2) {
+        if (f1 == null || f2 == null) return false;
+        String[] parts = f2.split("、");
+        for (String part : parts) {
+            if (floorsEqualSingle(f1, part.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 数值化比较单个楼层，兼容 "01" 与 "1" 等前导零差异。
+     */
+    private boolean floorsEqualSingle(String f1, String f2) {
         if (f1 == null || f2 == null) return false;
         try {
             return Integer.parseInt(f1) == Integer.parseInt(f2);
         } catch (NumberFormatException e) {
+            // 非数字楼层（如 "无", "B1"）退化为字符串比较
             return f1.equals(f2);
         }
     }
