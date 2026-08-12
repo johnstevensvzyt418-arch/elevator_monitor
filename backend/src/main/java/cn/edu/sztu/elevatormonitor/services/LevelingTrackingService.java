@@ -88,11 +88,21 @@ public class LevelingTrackingService {
         // 防"运行中误报"依赖楼层变化重置: 电梯运行中经过目标层时楼层会很快变化
         // (cur≠target) → 触发无效帧 → 连续 2 帧后重置计时; 只有电梯真正停在目标层才计时。
         boolean isLeveling = floorEquals(currentFloor, targetFloor);
-        boolean hasPassenger = "01".equals(passenger);
         boolean isDoorOpen = "01".equals(doorStatus);
-        boolean valid = isLeveling && hasPassenger && !isDoorOpen;
 
         Map<Object, Object> state = stringRedisTemplate.opsForHash().entries(hashKey);
+        String recorded = state != null ? (String) state.get("recorded") : null;
+
+        // 乘客判定（v0.1.8 增强：乘客保持，修复真实设备困人告警时长过短）：
+        // 真实电梯到站流程是【先复位内招信号 → 后开门】。报文实测 22:08:37 内招
+        // 已复位为"无"，但门仍处于"关门到位"（尚未开门），此时乘客实际还在轿厢内
+        // （门没开，出不去）。若仅按"门未开+无内招→无乘客"推断，困人计时会被
+        // 内招复位提前中断/告警提前熄灭，告警时长与真实困人严重不符。
+        // 修复：门未开（door≠01）时，只要此前已进入困人流程（recorded=1），
+        // 乘客状态保持"有乘客"，困人持续到门真正打开（door=01）才解除。
+        boolean hasPassenger = "01".equals(passenger)
+                || (!isDoorOpen && "1".equals(recorded));
+        boolean valid = isLeveling && hasPassenger && !isDoorOpen;
         String fired = state != null ? (String) state.get("fired") : null;
         long nowSec = Instant.now().getEpochSecond();
 
@@ -134,7 +144,6 @@ public class LevelingTrackingService {
 
         // ============ 有效帧：累计有效时长（抖动帧暂停累加，不清零） ============
         stringRedisTemplate.opsForHash().put(hashKey, "badCount", "0");
-        String recorded = state != null ? (String) state.get("recorded") : null;
         String accSecStr = state != null ? (String) state.get("accSec") : null;
         String lastValidStr = state != null ? (String) state.get("lastValid") : null;
         boolean paused = "-1".equals(lastValidStr);
