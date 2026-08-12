@@ -93,20 +93,27 @@ public class MqttConfig {
 
     /**
      * MQTT 消息处理线程池 — 供 @Async 注解使用，将消息处理从 MQTT 接收线程剥离。
+     *
+     * <p><b>容量调整 (2026-08-12):</b> 原 core=2/max=4 过小。设备上报链路为
+     * MQTT消息 → MNKApplicationService → 同步 publishEvent → AlarmHandler(同步
+     * 规则评估+Redis marker写) → RedisHandler(异步发布)。AlarmHandler 同步执行
+     * 会占用 mqttExecutor 线程；多设备并发或告警触发/Redis 延迟时，2 个核心线程
+     * 被占满导致后续消息排队，状态发布延迟 → 前端"告警后不实时"。
+     * 扩容到 core=8/max=16，并保留 CallerRunsPolicy 背压不丢消息。</p>
      */
     @Bean("mqttExecutor")
     public ThreadPoolTaskExecutor mqttExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(200);
+        executor.setCorePoolSize(8);
+        executor.setMaxPoolSize(16);
+        executor.setQueueCapacity(500);
         executor.setKeepAliveSeconds(60);
         executor.setThreadNamePrefix("mqtt-msg-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(10);
         executor.initialize();
-        LOGGER.info("[MQTT] mqttExecutor 初始化: core=2, max=4, queue=200");
+        LOGGER.info("[MQTT] mqttExecutor 初始化: core=8, max=16, queue=500");
         return executor;
     }
 

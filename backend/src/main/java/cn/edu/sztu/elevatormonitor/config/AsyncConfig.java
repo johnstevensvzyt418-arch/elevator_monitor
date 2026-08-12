@@ -65,17 +65,22 @@ public class AsyncConfig {
      * 频繁时，DB 写任务会占满线程，导致状态发布任务在队列中排队，前端显示延迟。
      * 独立线程池保证电梯状态实时性不受历史写入影响。</p>
      *
+     * <p><b>容量调整 (2026-08-12):</b> 原 core=2/max=4。RedisHandler 每次事件
+     * 执行 HSET + 时间戳 + PUBLISH + mergeAlarms(pipeline 3次读) 多次 Redis 操作，
+     * 在高频上报/告警时 2 核心线程不足会导致状态发布排队 → 前端不实时。
+     * 扩容到 core=4/max=8。</p>
+     *
      * <pre>
-     * corePoolSize  = 2      — 常驻线程（处理常规状态发布）
-     * maxPoolSize   = 4      — 峰值
+     * corePoolSize  = 4      — 常驻线程（处理常规状态发布）
+     * maxPoolSize   = 8      — 峰值
      * queueCapacity = 200    — 缓冲
      * </pre>
      */
     @Bean("redisExecutor")
     public ThreadPoolTaskExecutor redisExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
         executor.setQueueCapacity(200);
         executor.setKeepAliveSeconds(60);
         executor.setThreadNamePrefix("redis-worker-");
@@ -84,7 +89,7 @@ public class AsyncConfig {
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();
-        LOGGER.info("[Async] redisExecutor 初始化: core=2, max=4, queue=200, 独立于 DB 写入");
+        LOGGER.info("[Async] redisExecutor 初始化: core=4, max=8, queue=200, 独立于 DB 写入");
         return executor;
     }
 
