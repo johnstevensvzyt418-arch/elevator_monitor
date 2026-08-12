@@ -103,7 +103,7 @@ public class SpeedTrackingService {
             } else {
                 LOGGER.debug("[SpeedTrack] 设备 {} 首次上报, floor={}, 速度=0.0", deviceId, currentFloor);
             }
-            return 0.0;
+            return 0.0;                                                                                                                                                                                                    
         }
 
         // 解析上次缓存的速度（用于楼层未变时保持显示）
