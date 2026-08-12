@@ -24,6 +24,16 @@ public class DoorOpenRunningRule implements AlarmRule {
     /** 最低运行速度阈值(m/s)，低于此值视为已停止，避免残值误报 */
     private static final double MIN_SPEED_MPS = 0.3;
 
+    /**
+     * "移动保持窗口"（秒）：告警已激活后，电梯楼层在最近该秒数内变化过则保持告警，
+     * 避免"开门运行"期间楼层上报帧恰好未变化导致告警闪烁/误恢复。
+     * <p>修复真实设备到站停稳但方向字节未及时归零（仍报 01/02）时，
+     * SpeedTrackingService 因 direction≠00 不归零、速度残留导致误报开门运行：
+     * 触发必须满足"本帧楼层确实变化"（电梯此刻正在跨层移动）；已停稳（无论方向
+     * 字节如何）则楼层不变，不再触发。窗口仅用于已激活告警的保持，不用于触发。</p>
+     */
+    private static final long MOVING_WINDOW_SECONDS = 5;
+
     @Override
     public String ruleName() { return "DOOR_OPEN_RUNNING"; }
 
@@ -51,9 +61,53 @@ public class DoorOpenRunningRule implements AlarmRule {
             return null;
         }
 
+        // ============ 移动判定（v0.1.7 修复平层速度残留误报） ============
+        // 真实设备到站停稳时方向字节可能未及时归零（仍报 01/02），此时
+        // SpeedTrackingService 因 direction≠00 不进入平层归零分支，楼层未变
+        // 且缓存未过期时速度残留（>0.3），若停靠层≠目标层会误报开门运行。
+        // 修复核心：电梯真正"开门运行"时楼层必然正在跨层变化；已停稳则
+        // 楼层不变。因此触发必须满足"本帧楼层确实变化"（floorChanged）。
+        // 已激活后若楼层短暂未变（上报帧间隔/传感器抖动），用移动窗口保持，
+        // 避免告警闪烁；但不会用窗口"重新触发"，从而彻底消除停稳误报。
+        String prevFloor = state.getPreviousFloorForDoorOpen();
+        boolean floorChanged = curFloor != null && !curFloor.equals(prevFloor);
+        if (curFloor != null) {
+            state.setPreviousFloorForDoorOpen(curFloor);
+        }
+        if (floorChanged) {
+            state.setLastFloorChangeTimeForDoorOpen(java.time.Instant.now());
+        }
+
+        // 告警是否已激活（本规则）
+        boolean alreadyActive = state.isAlarmActive(ruleName());
+
+        // 移动窗口内保持：已激活且楼层在窗口内变化过 → 保持告警（本帧未变也不恢复）
+        java.time.Instant lastChange = state.getLastFloorChangeTimeForDoorOpen();
+        boolean inMovingWindow = lastChange != null
+                && java.time.Duration.between(lastChange, java.time.Instant.now()).getSeconds()
+                        <= MOVING_WINDOW_SECONDS;
+
+        // 关键判定：
+        //  - 楼层本帧变化 → 电梯确实在跨层移动 → 允许触发
+        //  - 楼层本帧未变但告警已激活且在窗口内 → 保持（不闪烁、不误恢复）
+        //  - 楼层本帧未变且告警未激活 → 电梯已停稳（或首次帧），不触发
+        boolean eligibleToTrigger = floorChanged
+                || (alreadyActive && inMovingWindow);
+        if (!eligibleToTrigger) {
+            return null;
+        }
+
         // 速度阈值: 必须 >0.3m/s（排除到站减速残值和停车误报）
         // speed=-1 表示速度未计算，此时保守处理不触发告警，避免误报
+        // 注意：已激活保持期间若速度残留仍>0.3 则可继续产生事件；若速度已归零
+        // 但仍在移动窗口内，也应保持（返回 fire 由引擎去重，避免闪烁）。
         if (speed < 0 || speed <= MIN_SPEED_MPS) {
+            // 速度不满足：仅在已激活保持期返回 fire 维持状态，未激活则不触发
+            if (alreadyActive && inMovingWindow) {
+                return AlarmEvent.fire(msg.getDeviceId(), ruleName(), level(), description(),
+                        "门状态=开门到位, 方向=" + dir + ", 位于" + curFloor + "楼(保持)",
+                        curFloor, msg.getSpeed());
+            }
             return null;
         }
 

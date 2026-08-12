@@ -34,6 +34,10 @@ public class DeviceState {
     private String lastFloorForIdleCheck;
     /** FloorJumpRule 专用：上一次的楼层值，用于检测跳变（独立字段避免规则间状态污染） */
     private String previousFloorForJump;
+    /** DoorOpenRunningRule 专用：上一次的楼层值，用于判断电梯是否真正在楼层间移动 */
+    private String previousFloorForDoorOpen;
+    /** DoorOpenRunningRule 专用：最近一次楼层变化时间，用于"移动窗口"判定 */
+    private Instant lastFloorChangeTimeForDoorOpen;
 
     // ---- 告警去重 ----
     /** 当前处于激活状态的告警规则名集合 (ConcurrentHashMap.newKeySet 保证线程安全) */
@@ -102,4 +106,10 @@ public class DeviceState {
     /** FloorJumpRule 专用楼层追踪 */
     public String getPreviousFloorForJump() { return previousFloorForJump; }
     public void setPreviousFloorForJump(String floor) { this.previousFloorForJump = floor; }
+
+    /** DoorOpenRunningRule 专用楼层追踪 */
+    public String getPreviousFloorForDoorOpen() { return previousFloorForDoorOpen; }
+    public void setPreviousFloorForDoorOpen(String floor) { this.previousFloorForDoorOpen = floor; }
+    public Instant getLastFloorChangeTimeForDoorOpen() { return lastFloorChangeTimeForDoorOpen; }
+    public void setLastFloorChangeTimeForDoorOpen(Instant t) { this.lastFloorChangeTimeForDoorOpen = t; }
 }
