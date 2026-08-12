@@ -71,6 +71,13 @@ def on_message(client, userdata, msg):
     """MQTT 回调 — 仅入队，立即返回，不阻塞 MQTT 网络循环。"""
     try:
         payload = msg.payload.decode().strip()
+        # 标准化报文：后端 MNKParser 用固定偏移(substring(30))解析，假设
+        # 头部30字符(F+时间含1空格+/+ID+/)后是连续 HEX。若设备/EMQX 分发了
+        # 带空格的分段报文，必须清理 HEX 区域(第30字符起)的空格，否则后端
+        # 段定位错乱导致解析失败/告警漏报。
+        # 注意：只清理 HEX 区域空格，绝不碰头部（头部时间含 1 个空格）。
+        if len(payload) > 30:
+            payload = payload[:30] + payload[30:].replace(" ", "").replace("\t", "")
         # 非阻塞入队；队列满时丢弃最旧消息（背压保护）
         try:
             MSG_QUEUE.put_nowait(payload)
