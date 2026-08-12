@@ -16,7 +16,7 @@ COPY settings.xml /root/.m2/settings.xml
 
 # 再复制源码，先运行本次部署的关键单元测试，再编译
 COPY src ./src
-RUN timeout 300 mvn -Dtest=TimeSeriesBufferTest,TelemetryDedupServiceTest,AiRuleFusionServiceTest test -B
+RUN timeout 300 mvn -Dtest=TimeSeriesBufferTest,TelemetryDedupServiceTest,AiRuleFusionServiceTest,AiAlarmListenerTest test -B
 RUN mvn package -DskipTests -B -q
 
 # ---- 阶段2：运行 ----
