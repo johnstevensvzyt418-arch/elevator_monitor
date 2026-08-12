@@ -313,6 +313,16 @@ def on_message(client, userdata, msg):
         if msg.topic.endswith("/command/up") or payload.startswith("{"):
             print(f"\n[Topic] {msg.topic}\n{payload}")
             return
+        # 设备过滤（--device 参数，报文第 22-29 位是设备ID）
+        device_filter = userdata.get("device")
+        if device_filter:
+            # 兼容带空格/不带空格：先定位设备ID（F + 19字符时间含1空格 + / 后 8 位）
+            try:
+                dev = payload[21:29]
+            except Exception:
+                dev = ""
+            if dev != device_filter:
+                return
         result = parse_packet(payload)
         print(format_packet(result))
         csv_path = userdata.get("csv")
@@ -332,7 +342,7 @@ def listen(device_filter=None, csv_path=None):
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=MQTT_CLIENT_ID,
-        userdata={"csv": csv_path},
+        userdata={"csv": csv_path, "device": device_filter},
     )
     if MQTT_USERNAME:
         client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
