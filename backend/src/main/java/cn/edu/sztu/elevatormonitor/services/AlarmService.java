@@ -1,5 +1,6 @@
 package cn.edu.sztu.elevatormonitor.services;
 
+import cn.edu.sztu.elevatormonitor.ai.AiRuleFusionService;
 import cn.edu.sztu.elevatormonitor.alarm.AlarmRuleEngine;
 import cn.edu.sztu.elevatormonitor.entity.AlarmEvent;
 import cn.edu.sztu.elevatormonitor.entity.ElevatorMessage;
@@ -31,13 +32,16 @@ public class AlarmService {
     private final AlarmRuleEngine engine;
     private final AlarmEventJpaRepository alarmRepo;
     private final StringRedisTemplate stringRedisTemplate;
+    private final AiRuleFusionService aiRuleFusionService;
 
     public AlarmService(AlarmRuleEngine engine,
                         AlarmEventJpaRepository alarmRepo,
-                        StringRedisTemplate stringRedisTemplate) {
+                        StringRedisTemplate stringRedisTemplate,
+                        AiRuleFusionService aiRuleFusionService) {
         this.engine = engine;
         this.alarmRepo = alarmRepo;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.aiRuleFusionService = aiRuleFusionService;
         LOGGER.info("[Alarm] 告警服务初始化完成, Redis频道={}", CHANNEL_ELEVATOR_ALARM);
     }
 
@@ -138,6 +142,7 @@ public class AlarmService {
                         "\"Alarm\":\"" + alarmValue + "\"");
                 stringRedisTemplate.opsForHash().put("elevator:status", deviceId, updated);
                 stringRedisTemplate.convertAndSend("elevator:status", updated);
+                aiRuleFusionService.updateAlarmState(deviceId, alarmValue);
                 LOGGER.info("[Alarm] status Alarm 已更新: deviceId={}, alarm={}", deviceId, alarmValue);
             }
         } catch (Exception e) {

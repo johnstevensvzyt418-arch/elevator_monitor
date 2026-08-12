@@ -269,6 +269,25 @@ public class TimeSeriesBuffer {
         }
     }
 
+    /**
+     * Clear both the samples and the timestamp anchor for a device.
+     * Rule/AI fusion uses this when a deterministic alarm starts or clears so
+     * samples from different operating states can never share one window.
+     */
+    public void clear(String deviceId) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            return;
+        }
+        try {
+            redis.delete(Arrays.asList(
+                    KEY_PREFIX + deviceId,
+                    LAST_SAMPLE_PREFIX + deviceId));
+            LOGGER.info("[TS-Buffer] cleared deviceId={} reason=rule-fusion", deviceId);
+        } catch (Exception e) {
+            LOGGER.error("[TS-Buffer] clear failed deviceId={}: {}", deviceId, e.getMessage());
+        }
+    }
+
     // ============================================================
     // 特征提取工具方法
     // ============================================================

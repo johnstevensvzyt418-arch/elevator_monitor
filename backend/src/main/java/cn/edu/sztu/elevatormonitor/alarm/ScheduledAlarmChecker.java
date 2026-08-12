@@ -1,5 +1,6 @@
 package cn.edu.sztu.elevatormonitor.alarm;
 
+import cn.edu.sztu.elevatormonitor.ai.AiRuleFusionService;
 import cn.edu.sztu.elevatormonitor.services.LevelingTrackingService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -71,12 +72,15 @@ public class ScheduledAlarmChecker {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final LevelingTrackingService levelingTrackingService;
+    private final AiRuleFusionService aiRuleFusionService;
     private final ObjectMapper objectMapper;
 
     public ScheduledAlarmChecker(StringRedisTemplate stringRedisTemplate,
-                                 LevelingTrackingService levelingTrackingService) {
+                                 LevelingTrackingService levelingTrackingService,
+                                 AiRuleFusionService aiRuleFusionService) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.levelingTrackingService = levelingTrackingService;
+        this.aiRuleFusionService = aiRuleFusionService;
         this.objectMapper = new ObjectMapper();
         LOGGER.info("[巡检] 定时巡检器初始化完成, 周期=10s, 离线阈值={}s, 门超时={}s, 闲置={}s",
                 offlineThresholdSeconds, doorOpenThresholdSeconds, longIdleThresholdSeconds);
@@ -250,6 +254,9 @@ public class ScheduledAlarmChecker {
             Set<String> merged = new LinkedHashSet<>(eventAlarms);
             merged.addAll(patrolAlarms);
             String finalAlarm = String.join(",", merged);
+
+            // Patrol alarms can change without another telemetry event.
+            aiRuleFusionService.updateAlarmState(deviceId, finalAlarm);
 
             // 巡检告警与最终告警均未发生变化 → 直接返回，跳过更新与发布。
             // 修复: 原实现每 10s 无条件重发 status + alarm, 导致:

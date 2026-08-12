@@ -27,6 +27,12 @@ telemetry:
   dedup:
     ttl-seconds: 30
 
+ai:
+  rule-fusion:
+    enabled: true
+    threshold: 90
+    score-margin: 10
+
 # 生产环境告警阈值
 alarm:
   leveling:
