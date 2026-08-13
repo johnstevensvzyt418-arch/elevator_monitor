@@ -38,6 +38,8 @@ public class DeviceState {
     private String previousFloorForDoorOpen;
     /** DoorOpenRunningRule 专用：最近一次楼层变化时间，用于"移动窗口"判定 */
     private Instant lastFloorChangeTimeForDoorOpen;
+    /** LowSpeedRule 专用：上一次的楼层值，用于区分"正常跨层移动"与"原地低速" */
+    private String previousFloorForLowSpeed;
 
     // ---- 告警去重 ----
     /** 当前处于激活状态的告警规则名集合 (ConcurrentHashMap.newKeySet 保证线程安全) */
@@ -112,4 +114,6 @@ public class DeviceState {
     public void setPreviousFloorForDoorOpen(String floor) { this.previousFloorForDoorOpen = floor; }
     public Instant getLastFloorChangeTimeForDoorOpen() { return lastFloorChangeTimeForDoorOpen; }
     public void setLastFloorChangeTimeForDoorOpen(Instant t) { this.lastFloorChangeTimeForDoorOpen = t; }
+    public String getPreviousFloorForLowSpeed() { return previousFloorForLowSpeed; }
+    public void setPreviousFloorForLowSpeed(String floor) { this.previousFloorForLowSpeed = floor; }
 }
