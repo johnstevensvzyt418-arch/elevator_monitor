@@ -93,6 +93,18 @@ public class LevelingTrackingService {
         Map<Object, Object> state = stringRedisTemplate.opsForHash().entries(hashKey);
         String recorded = state != null ? (String) state.get("recorded") : null;
 
+        // 平层保持（v0.1.9 增强：内招复位后门未开仍保持困人）：
+        // 真实电梯到站流程【先复位内招信号 → 再开门】。若门打不开（真实困人），
+        // 内招复位后 targetFloor="无"，floorEquals(cur,"无")=false 会导致平层判定失败、
+        // 困人提前解除。实测新报文 22:41:08 内招复位但门一直未开（开关门中），
+        // 电梯持续困在3楼。修复：一旦进入困人流程（recorded=1），只要当前楼层仍等于
+        // 困人楼层（levelFloor）且门未开，平层判定保持 true —— 困人持续到门真正打开
+        // (door=01) 或楼层变化（电梯重新运行离开）才解除。
+        String levelFloor = state != null ? (String) state.get("levelFloor") : null;
+        if ("1".equals(recorded) && levelFloor != null) {
+            isLeveling = isLeveling || floorEquals(currentFloor, levelFloor);
+        }
+
         // 乘客判定（v0.1.8 增强：乘客保持，修复真实设备困人告警时长过短）：
         // 真实电梯到站流程是【先复位内招信号 → 后开门】。报文实测 22:08:37 内招
         // 已复位为"无"，但门仍处于"关门到位"（尚未开门），此时乘客实际还在轿厢内
@@ -151,6 +163,8 @@ public class LevelingTrackingService {
         if (!"1".equals(recorded) || lastValidStr == null || paused) {
             // 首次进入 或 从暂停恢复：重设计时起点，不把暂停期计入
             stringRedisTemplate.opsForHash().put(hashKey, "recorded", "1");
+            // 记录困人楼层（供内招复位后平层保持判定）
+            stringRedisTemplate.opsForHash().put(hashKey, "levelFloor", currentFloor);
             if (lastValidStr == null || !"1".equals(recorded)) {
                 stringRedisTemplate.opsForHash().put(hashKey, "accSec", "0");
                 LOGGER.info("[Leveling] 设备 {} 平层有乘客门未开, 开始计时 (阈值={}s), floor={}",
@@ -246,5 +260,6 @@ public class LevelingTrackingService {
         stringRedisTemplate.opsForHash().put(hashKey, "lastValid", "0");
         stringRedisTemplate.opsForHash().put(hashKey, "badCount", "0");
         stringRedisTemplate.opsForHash().put(hashKey, "fired", "0");
+        stringRedisTemplate.opsForHash().put(hashKey, "levelFloor", "0");
     }
 }
